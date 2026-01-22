@@ -118,9 +118,7 @@ def remove_package(conn: sqlite3.Connection, name: str) -> bool:
 
 def get_packages(conn: sqlite3.Connection) -> list[str]:
     """Get list of tracked package names from the database."""
-    cursor = conn.execute(
-        "SELECT package_name FROM packages ORDER BY package_name"
-    )
+    cursor = conn.execute("SELECT package_name FROM packages ORDER BY package_name")
     return [row["package_name"] for row in cursor.fetchall()]
 
 
@@ -161,7 +159,9 @@ def load_packages_from_file(file_path: str) -> list[str]:
     return packages
 
 
-def import_packages_from_file(conn: sqlite3.Connection, file_path: str) -> tuple[int, int]:
+def import_packages_from_file(
+    conn: sqlite3.Connection, file_path: str
+) -> tuple[int, int]:
     """Import packages from a file into the database.
 
     Supports YAML, JSON, and plain text formats.
@@ -1133,7 +1133,9 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     packages = get_packages(conn)
     if not packages:
         print("No packages are being tracked.")
-        print("Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'.")
+        print(
+            "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
+        )
         conn.close()
         return
 
@@ -1240,16 +1242,18 @@ def cmd_show(args: argparse.Namespace) -> None:
             sign = "+" if g >= 0 else ""
             growth_str = f"{sign}{g:.1f}%"
 
-        rows.append([
-            i,
-            pkg,
-            f"{s['total'] or 0:,}",
-            f"{s['last_month'] or 0:,}",
-            f"{s['last_week'] or 0:,}",
-            f"{s['last_day'] or 0:,}",
-            sparkline,
-            growth_str,
-        ])
+        rows.append(
+            [
+                i,
+                pkg,
+                f"{s['total'] or 0:,}",
+                f"{s['last_month'] or 0:,}",
+                f"{s['last_week'] or 0:,}",
+                f"{s['last_day'] or 0:,}",
+                sparkline,
+                growth_str,
+            ]
+        )
 
     headers = ["#", "Package", "Total", "Month", "Week", "Day", "Trend", "Growth"]
     print(tabulate(rows, headers=headers, tablefmt="simple"))
@@ -1265,7 +1269,9 @@ def cmd_list(args: argparse.Namespace) -> None:
     if not packages:
         conn.close()
         print("No packages are being tracked.")
-        print("Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'.")
+        print(
+            "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
+        )
         return
 
     # Get added dates for each package
@@ -1338,13 +1344,15 @@ def cmd_history(args: argparse.Namespace) -> None:
 
     rows = []
     for h in reversed(history):
-        rows.append([
-            h["fetch_date"],
-            f"{h['total'] or 0:,}",
-            f"{h['last_month'] or 0:,}",
-            f"{h['last_week'] or 0:,}",
-            f"{h['last_day'] or 0:,}",
-        ])
+        rows.append(
+            [
+                h["fetch_date"],
+                f"{h['total'] or 0:,}",
+                f"{h['last_month'] or 0:,}",
+                f"{h['last_week'] or 0:,}",
+                f"{h['last_day'] or 0:,}",
+            ]
+        )
 
     headers = ["Date", "Total", "Month", "Week", "Day"]
     print(tabulate(rows, headers=headers, tablefmt="simple"))
