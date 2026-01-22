@@ -29,7 +29,7 @@ typecheck:
 format:
 	@uv run ruff format src/
 
-qa: lint typecheck format
+qa: test lint typecheck format
 
 build: clean
 	@uv build
