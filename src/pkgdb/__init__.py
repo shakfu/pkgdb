@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-pkglog - Track PyPI package download statistics.
+pkgdb - Track PyPI package download statistics.
 
 Reads published packages from packages.yml, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
@@ -25,8 +25,8 @@ DEFAULT_PACKAGES_FILE = "packages.yml"
 
 
 def get_config_dir() -> Path:
-    """Get the pkglog config directory (~/.pkglog), creating it if needed."""
-    config_dir = Path.home() / ".pkglog"
+    """Get the pkgdb config directory (~/.pkgdb), creating it if needed."""
+    config_dir = Path.home() / ".pkgdb"
     config_dir.mkdir(exist_ok=True)
     return config_dir
 

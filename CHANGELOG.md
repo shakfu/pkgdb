@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - HTML report enhancements:
-  - `pkglog report <package>` generates detailed single-package report with download stats, history chart, Python version and OS distribution pie charts
-  - `pkglog report -e` includes aggregated Python version and OS distribution summary in the main report
+  - `pkgdb report <package>` generates detailed single-package report with download stats, history chart, Python version and OS distribution pie charts
+  - `pkgdb report -e` includes aggregated Python version and OS distribution summary in the main report
 - New functions: `make_svg_pie_chart`, `aggregate_env_stats`, `generate_package_html_report`
 - 14 new tests for pie charts, environment aggregation, and package reports (69 total)
 
@@ -34,9 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `export` command with support for multiple formats:
-  - CSV (`pkglog export -f csv`)
-  - JSON (`pkglog export -f json`)
-  - Markdown (`pkglog export -f markdown`)
+  - CSV (`pkgdb export -f csv`)
+  - JSON (`pkgdb export -f json`)
+  - Markdown (`pkgdb export -f markdown`)
 - Export to file with `-o` option or stdout by default
 - New functions: `export_csv`, `export_json`, `export_markdown`
 

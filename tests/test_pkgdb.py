@@ -1,4 +1,4 @@
-"""Tests for pkglog - PyPI package download statistics tracker."""
+"""Tests for pkgdb - PyPI package download statistics tracker."""
 
 import json
 import sqlite3
@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from pkglog import (
+from pkgdb import (
     get_db_connection,
     init_db,
     load_packages,
@@ -445,8 +445,8 @@ class TestFetchPackageStats:
             ]
         })
 
-        with patch("pkglog.pypistats.recent", return_value=recent_response):
-            with patch("pkglog.pypistats.overall", return_value=overall_response):
+        with patch("pkgdb.pypistats.recent", return_value=recent_response):
+            with patch("pkgdb.pypistats.overall", return_value=overall_response):
                 stats = fetch_package_stats("test-package")
 
         assert stats["last_day"] == 100
@@ -456,7 +456,7 @@ class TestFetchPackageStats:
 
     def test_fetch_package_stats_handles_error(self, capsys):
         """fetch_package_stats should return None and print error on failure."""
-        with patch("pkglog.pypistats.recent", side_effect=Exception("API error")):
+        with patch("pkgdb.pypistats.recent", side_effect=Exception("API error")):
             stats = fetch_package_stats("nonexistent-package")
 
         assert stats is None
@@ -473,7 +473,7 @@ class TestFetchPackageStats:
             ]
         })
 
-        with patch("pkglog.pypistats.python_minor", return_value=mock_response):
+        with patch("pkgdb.pypistats.python_minor", return_value=mock_response):
             versions = fetch_python_versions("test-package")
 
         assert versions is not None
@@ -484,7 +484,7 @@ class TestFetchPackageStats:
 
     def test_fetch_python_versions_handles_error(self, capsys):
         """fetch_python_versions should return None on error."""
-        with patch("pkglog.pypistats.python_minor", side_effect=Exception("API error")):
+        with patch("pkgdb.pypistats.python_minor", side_effect=Exception("API error")):
             versions = fetch_python_versions("nonexistent-package")
 
         assert versions is None
@@ -499,7 +499,7 @@ class TestFetchPackageStats:
             ]
         })
 
-        with patch("pkglog.pypistats.system", return_value=mock_response):
+        with patch("pkgdb.pypistats.system", return_value=mock_response):
             os_stats = fetch_os_stats("test-package")
 
         assert os_stats is not None
@@ -510,7 +510,7 @@ class TestFetchPackageStats:
 
     def test_fetch_os_stats_handles_error(self, capsys):
         """fetch_os_stats should return None on error."""
-        with patch("pkglog.pypistats.system", side_effect=Exception("API error")):
+        with patch("pkgdb.pypistats.system", side_effect=Exception("API error")):
             os_stats = fetch_os_stats("nonexistent-package")
 
         assert os_stats is None
@@ -622,7 +622,7 @@ class TestCLI:
 
     def test_main_no_command_shows_help(self, capsys):
         """main() with no command should print help."""
-        with patch("sys.argv", ["pkglog"]):
+        with patch("sys.argv", ["pkgdb"]):
             main()
         captured = capsys.readouterr()
         assert "usage:" in captured.out.lower() or "Available commands" in captured.out
@@ -636,9 +636,9 @@ class TestCLI:
             "data": [{"category": "without_mirrors", "downloads": 50000}]
         })
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "-p", temp_packages_file, "fetch"]):
-            with patch("pkglog.pypistats.recent", return_value=recent_response):
-                with patch("pkglog.pypistats.overall", return_value=overall_response):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "-p", temp_packages_file, "fetch"]):
+            with patch("pkgdb.pypistats.recent", return_value=recent_response):
+                with patch("pkgdb.pypistats.overall", return_value=overall_response):
                     main()
 
         conn = get_db_connection(temp_db)
@@ -652,7 +652,7 @@ class TestCLI:
         init_db(conn)
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "list"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "list"]):
             main()
 
         captured = capsys.readouterr()
@@ -670,7 +670,7 @@ class TestCLI:
         conn.commit()
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "list"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "list"]):
             main()
 
         captured = capsys.readouterr()
@@ -694,7 +694,7 @@ class TestCLI:
             output_path = f.name
 
         try:
-            with patch("sys.argv", ["pkglog", "-d", temp_db, "report", "-o", output_path]):
+            with patch("sys.argv", ["pkgdb", "-d", temp_db, "report", "-o", output_path]):
                 with patch("webbrowser.open_new_tab"):
                     main()
 
@@ -718,7 +718,7 @@ class TestCLI:
         conn.commit()
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "history", "test-pkg"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "test-pkg"]):
             main()
 
         captured = capsys.readouterr()
@@ -732,7 +732,7 @@ class TestCLI:
         init_db(conn)
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "history", "nonexistent"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "nonexistent"]):
             main()
 
         captured = capsys.readouterr()
@@ -750,7 +750,7 @@ class TestCLI:
         conn.commit()
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "export", "-f", "csv"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "csv"]):
             main()
 
         captured = capsys.readouterr()
@@ -769,7 +769,7 @@ class TestCLI:
         conn.commit()
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "export", "-f", "json"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "json"]):
             main()
 
         captured = capsys.readouterr()
@@ -788,7 +788,7 @@ class TestCLI:
         conn.commit()
         conn.close()
 
-        with patch("sys.argv", ["pkglog", "-d", temp_db, "export", "-f", "markdown"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "markdown"]):
             main()
 
         captured = capsys.readouterr()
@@ -811,7 +811,7 @@ class TestCLI:
             output_path = f.name
 
         try:
-            with patch("sys.argv", ["pkglog", "-d", temp_db, "export", "-f", "csv", "-o", output_path]):
+            with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "csv", "-o", output_path]):
                 main()
 
             assert Path(output_path).exists()
@@ -841,11 +841,11 @@ class TestCLI:
             ]
         })
 
-        with patch("sys.argv", ["pkglog", "stats", "test-package"]):
-            with patch("pkglog.pypistats.recent", return_value=recent_response):
-                with patch("pkglog.pypistats.overall", return_value=overall_response):
-                    with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                        with patch("pkglog.pypistats.system", return_value=system_response):
+        with patch("sys.argv", ["pkgdb", "stats", "test-package"]):
+            with patch("pkgdb.pypistats.recent", return_value=recent_response):
+                with patch("pkgdb.pypistats.overall", return_value=overall_response):
+                    with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                        with patch("pkgdb.pypistats.system", return_value=system_response):
                             main()
 
         captured = capsys.readouterr()
@@ -883,10 +883,10 @@ class TestCLI:
         })
 
         try:
-            with patch("sys.argv", ["pkglog", "-d", temp_db, "report", "test-pkg", "-o", output_path]):
+            with patch("sys.argv", ["pkgdb", "-d", temp_db, "report", "test-pkg", "-o", output_path]):
                 with patch("webbrowser.open_new_tab"):
-                    with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                        with patch("pkglog.pypistats.system", return_value=system_response):
+                    with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                        with patch("pkgdb.pypistats.system", return_value=system_response):
                             main()
 
             assert Path(output_path).exists()
@@ -931,10 +931,10 @@ class TestCLI:
         })
 
         try:
-            with patch("sys.argv", ["pkglog", "-d", temp_db, "report", "-e", "-o", output_path]):
+            with patch("sys.argv", ["pkgdb", "-d", temp_db, "report", "-e", "-o", output_path]):
                 with patch("webbrowser.open_new_tab"):
-                    with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                        with patch("pkglog.pypistats.system", return_value=system_response):
+                    with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                        with patch("pkgdb.pypistats.system", return_value=system_response):
                             main()
 
             assert Path(output_path).exists()
@@ -1021,8 +1021,8 @@ class TestAggregateEnvStats:
             call_count["system"] += 1
             return system_response_1 if call_count["system"] == 1 else system_response_2
 
-        with patch("pkglog.pypistats.python_minor", side_effect=mock_python_minor):
-            with patch("pkglog.pypistats.system", side_effect=mock_system):
+        with patch("pkgdb.pypistats.python_minor", side_effect=mock_python_minor):
+            with patch("pkgdb.pypistats.system", side_effect=mock_system):
                 result = aggregate_env_stats(["pkg-a", "pkg-b"])
 
         # Should aggregate downloads
@@ -1034,8 +1034,8 @@ class TestAggregateEnvStats:
 
     def test_aggregate_env_stats_handles_errors(self):
         """aggregate_env_stats should handle API errors gracefully."""
-        with patch("pkglog.pypistats.python_minor", side_effect=Exception("API error")):
-            with patch("pkglog.pypistats.system", side_effect=Exception("API error")):
+        with patch("pkgdb.pypistats.python_minor", side_effect=Exception("API error")):
+            with patch("pkgdb.pypistats.system", side_effect=Exception("API error")):
                 result = aggregate_env_stats(["pkg-a"])
 
         assert result["python_versions"] == []
@@ -1068,8 +1068,8 @@ class TestPackageHTMLReport:
         })
 
         try:
-            with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                with patch("pkglog.pypistats.system", return_value=system_response):
+            with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                with patch("pkgdb.pypistats.system", return_value=system_response):
                     generate_package_html_report("test-pkg", output_path, stats=stats)
 
             assert Path(output_path).exists()
@@ -1092,8 +1092,8 @@ class TestPackageHTMLReport:
         system_response = json.dumps({"data": []})
 
         try:
-            with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                with patch("pkglog.pypistats.system", return_value=system_response):
+            with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                with patch("pkgdb.pypistats.system", return_value=system_response):
                     generate_package_html_report("test-pkg", output_path, stats=stats)
 
             content = Path(output_path).read_text()
@@ -1128,8 +1128,8 @@ class TestPackageHTMLReport:
         })
 
         try:
-            with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                with patch("pkglog.pypistats.system", return_value=system_response):
+            with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                with patch("pkgdb.pypistats.system", return_value=system_response):
                     generate_package_html_report("test-pkg", output_path, stats=stats)
 
             content = Path(output_path).read_text()
@@ -1157,8 +1157,8 @@ class TestPackageHTMLReport:
         system_response = json.dumps({"data": []})
 
         try:
-            with patch("pkglog.pypistats.python_minor", return_value=python_response):
-                with patch("pkglog.pypistats.system", return_value=system_response):
+            with patch("pkgdb.pypistats.python_minor", return_value=python_response):
+                with patch("pkgdb.pypistats.system", return_value=system_response):
                     generate_package_html_report("test-pkg", output_path, stats=stats, history=history)
 
             content = Path(output_path).read_text()

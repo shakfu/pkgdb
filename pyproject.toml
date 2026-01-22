@@ -1,7 +1,7 @@
 [project]
-name = "pkglog"
+name = "pkgdb"
 version = "0.1.0"
-description = "Track PyPI package download statistics"
+description = "Track, store and query your PyPI package download statistics"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -31,12 +31,12 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/shakfu/pkglog"
-Repository = "https://github.com/shakfu/pkglog"
-Issues = "https://github.com/shakfu/pkglog/issues"
+Homepage = "https://github.com/shakfu/pkgdb"
+Repository = "https://github.com/shakfu/pkgdb"
+Issues = "https://github.com/shakfu/pkgdb/issues"
 
 [project.scripts]
-pkglog = "pkglog:main"
+pkgdb = "pkgdb:main"
 
 [dependency-groups]
 dev = [
