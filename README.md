@@ -28,11 +28,28 @@ published:
 # Fetch latest stats from PyPI and store in database
 pkglog fetch
 
-# Display stats in terminal
+# Display stats in terminal (includes trend sparklines and growth %)
 pkglog list
+
+# Show historical stats for a specific package
+pkglog history <package-name>
 
 # Generate HTML report with charts (opens in browser)
 pkglog report
+
+# Generate detailed HTML report for a single package
+pkglog report <package-name>
+
+# Include environment summary (Python versions, OS) in report
+pkglog report -e
+
+# Export stats in various formats
+pkglog export -f csv      # CSV format (default)
+pkglog export -f json     # JSON format
+pkglog export -f markdown # Markdown table
+
+# Show detailed stats for a package (Python versions, OS breakdown)
+pkglog stats <package-name>
 
 # Fetch stats and generate report in one step
 pkglog update
@@ -49,15 +66,24 @@ pkglog -p custom.yml fetch
 
 # Specify output file for report
 pkglog report -o custom-report.html
+
+# Limit history output to N days
+pkglog history my-package -n 14
+
+# Export to file instead of stdout
+pkglog export -f json -o stats.json
 ```
 
 ## Architecture
 
-Single-file CLI application with four commands:
+Single-file CLI application with seven commands:
 
 - **fetch**: Calls `pypistats.recent()` and `pypistats.overall()` for each package, stores results in SQLite
-- **list**: Queries latest stats per package, prints formatted table to terminal
-- **report**: Generates self-contained HTML report with Chart.js visualizations
+- **list**: Queries latest stats per package with trend sparklines and growth metrics
+- **history**: Shows historical data for a specific package over time
+- **report**: Generates self-contained HTML report with SVG charts (bar charts + time-series). With `-e` flag, includes Python version and OS distribution summary. With package argument, generates detailed single-package report
+- **export**: Exports stats in CSV, JSON, or Markdown format
+- **stats**: Shows detailed breakdown (Python versions, OS) for a single package
 - **update**: Runs fetch then report
 
 ### Data flow

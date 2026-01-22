@@ -1,29 +1,56 @@
+NAME := "myapp"
 
-PHONY: all sync update fetch report clean reseat
+.PHONY: all test sync update fetch report lint typecheck format qa \
+		build wheel sdist check publish publish-test clean reset
 
-
-all: sync
-
+all: test
 
 sync:
-	@uv run sync
+	@uv sync
 
+test: sync
+	@uv run pytest
 
 update:
-	@uv run pkglog update
-
+	@uv run $(NAME) update
 
 fetch:
-	@uv run pkglog fetch
-
+	@uv run $(NAME) fetch
 
 report:
-	@uv run pkglog report
+	@uv run $(NAME) report
 
+lint:
+	@uv run ruff check --fix src/
+
+typecheck:
+	@uv run mypy --strict src/
+
+format:
+	@uv run ruff format src/
+
+qa: lint typecheck format
+
+build: clean
+	@uv build
+
+wheel: clean
+	@uv build --wheel
+
+sdist: clean
+	@uv build --sdist
+
+check: build
+	@uv run twine check dist/*
+
+publish: check
+	@uv run twine upload dist/*
+
+publish-test: check
+	@uv run twine upload --repository testpypi dist/*
 
 clean:
 	@rm -f report.html
 
-
 reset: clean
-	@rm -rf build dist .venv
+	@rm -rf build dist .venv *.egg-info src/*.egg-info
