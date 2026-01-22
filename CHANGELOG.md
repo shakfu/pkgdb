@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.4]
+## [0.1.2]
 
 ### Added
 
@@ -16,10 +16,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `pkgdb report -e` includes aggregated Python version and OS distribution summary in the main report
 - New functions: `make_svg_pie_chart`, `aggregate_env_stats`, `generate_package_html_report`
 - 14 new tests for pie charts, environment aggregation, and package reports (69 total)
-
-## [0.1.3]
-
-### Added
 
 - `stats` command for detailed package statistics:
   - Python version distribution with visual bars
@@ -31,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Per-version (package version) downloads not available through pypistats API
 
-## [0.1.2]
+## [0.1.1]
 
 ### Added
 
@@ -41,10 +37,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Markdown (`pkgdb export -f markdown`)
 - Export to file with `-o` option or stdout by default
 - New functions: `export_csv`, `export_json`, `export_markdown`
-
-## [0.1.1]
-
-### Added
 
 - `history` command to view historical stats for a specific package
 - Growth metrics (month-over-month percentage change) in `list` output

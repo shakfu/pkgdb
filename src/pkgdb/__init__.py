@@ -22,7 +22,7 @@ from tabulate import tabulate
 from typing import Any
 
 
-__version__ = "0.1.4"
+__version__ = "0.1.2"
 
 
 DEFAULT_PACKAGES_FILE = "packages.yml"
