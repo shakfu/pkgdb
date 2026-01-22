@@ -10,15 +10,15 @@ sync:
 
 
 update:
-	@uv run pkglog.py update
+	@uv run pkglog update
 
 
 fetch:
-	@uv run pkglog.py fetch
+	@uv run pkglog fetch
 
 
 report:
-	@uv run pkglog.py report
+	@uv run pkglog report
 
 
 clean:

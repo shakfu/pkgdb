@@ -263,7 +263,7 @@ class TestHTMLReportGeneration:
     """Tests for HTML report generation."""
 
     def test_generate_html_report_creates_file(self):
-        """generate_html_report should create an HTML file."""
+        """generate_html_report should create a self-contained HTML file with SVG."""
         stats = [
             {
                 "package_name": "test-pkg",
@@ -286,7 +286,8 @@ class TestHTMLReportGeneration:
             content = Path(output_path).read_text()
             assert "<!DOCTYPE html>" in content
             assert "test-pkg" in content
-            assert "chart.js" in content
+            assert "<svg" in content
+            assert "cdn" not in content.lower()
         finally:
             Path(output_path).unlink(missing_ok=True)
 
@@ -323,7 +324,6 @@ class TestHTMLReportGeneration:
             assert "No statistics available" in captured.out
         finally:
             Path(output_path).unlink(missing_ok=True)
-
 
 class TestCLI:
     """Tests for CLI argument parsing and commands."""

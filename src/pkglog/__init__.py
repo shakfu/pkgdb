@@ -125,16 +125,59 @@ def get_latest_stats(conn: sqlite3.Connection) -> list[dict]:
 
 
 def generate_html_report(stats: list[dict], output_file: str) -> None:
-    """Generate an HTML report with charts."""
+    """Generate a self-contained HTML report with inline SVG charts."""
     if not stats:
         print("No statistics available to generate report.")
         return
 
-    package_names = [s["package_name"] for s in stats]
-    totals = [s["total"] or 0 for s in stats]
-    last_month = [s["last_month"] or 0 for s in stats]
-    last_week = [s["last_week"] or 0 for s in stats]
-    last_day = [s["last_day"] or 0 for s in stats]
+    def make_svg_bar_chart(data: list[tuple[str, int]], title: str, chart_id: str) -> str:
+        """Generate an SVG bar chart."""
+        if not data:
+            return ""
+
+        max_val = max(v for _, v in data) or 1
+        bar_height = 28
+        bar_gap = 6
+        label_width = 160
+        value_width = 80
+        chart_width = 700
+        bar_area_width = chart_width - label_width - value_width
+        chart_height = len(data) * (bar_height + bar_gap) + 20
+
+        svg_parts = [
+            f'<svg id="{chart_id}" viewBox="0 0 {chart_width} {chart_height}" '
+            f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:12px;">'
+        ]
+
+        for i, (name, value) in enumerate(data):
+            y = i * (bar_height + bar_gap) + 10
+            bar_width = (value / max_val) * bar_area_width if max_val > 0 else 0
+            hue = (i * 360 // len(data)) % 360
+
+            # Label
+            svg_parts.append(
+                f'<text x="{label_width - 8}" y="{y + bar_height // 2 + 4}" '
+                f'text-anchor="end" fill="#333">{name}</text>'
+            )
+            # Bar
+            svg_parts.append(
+                f'<rect x="{label_width}" y="{y}" width="{bar_width:.1f}" '
+                f'height="{bar_height}" fill="hsl({hue}, 70%, 50%)" rx="3"/>'
+            )
+            # Value
+            svg_parts.append(
+                f'<text x="{label_width + bar_area_width + 8}" y="{y + bar_height // 2 + 4}" '
+                f'fill="#666">{value:,}</text>'
+            )
+
+        svg_parts.append('</svg>')
+        return '\n'.join(svg_parts)
+
+    totals_data = [(s["package_name"], s["total"] or 0) for s in stats]
+    month_data = [(s["package_name"], s["last_month"] or 0) for s in stats]
+
+    totals_chart = make_svg_bar_chart(totals_data, "Total Downloads", "totals-chart")
+    month_chart = make_svg_bar_chart(month_data, "Last Month", "month-chart")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -142,7 +185,6 @@ def generate_html_report(stats: list[dict], output_file: str) -> None:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>PyPI Package Download Statistics</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -160,6 +202,7 @@ def generate_html_report(stats: list[dict], output_file: str) -> None:
             padding: 20px;
             margin: 20px 0;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow-x: auto;
         }}
         table {{
             width: 100%;
@@ -197,12 +240,12 @@ def generate_html_report(stats: list[dict], output_file: str) -> None:
 
     <div class="chart-container">
         <h2>Total Downloads by Package</h2>
-        <canvas id="totalChart"></canvas>
+        {totals_chart}
     </div>
 
     <div class="chart-container">
         <h2>Recent Downloads (Last Month)</h2>
-        <canvas id="monthChart"></canvas>
+        {month_chart}
     </div>
 
     <h2>Detailed Statistics</h2>
@@ -235,58 +278,6 @@ def generate_html_report(stats: list[dict], output_file: str) -> None:
     </table>
 
     <p class="generated">Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-
-    <script>
-        const packageNames = {json.dumps(package_names)};
-        const totals = {json.dumps(totals)};
-        const lastMonth = {json.dumps(last_month)};
-
-        const colors = packageNames.map((_, i) =>
-            `hsl(${{(i * 360 / packageNames.length) % 360}}, 70%, 50%)`
-        );
-
-        new Chart(document.getElementById('totalChart'), {{
-            type: 'bar',
-            data: {{
-                labels: packageNames,
-                datasets: [{{
-                    label: 'Total Downloads',
-                    data: totals,
-                    backgroundColor: colors,
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ display: false }}
-                }},
-                scales: {{
-                    y: {{ beginAtZero: true }}
-                }}
-            }}
-        }});
-
-        new Chart(document.getElementById('monthChart'), {{
-            type: 'bar',
-            data: {{
-                labels: packageNames,
-                datasets: [{{
-                    label: 'Last Month',
-                    data: lastMonth,
-                    backgroundColor: colors,
-                }}]
-            }},
-            options: {{
-                responsive: true,
-                plugins: {{
-                    legend: {{ display: false }}
-                }},
-                scales: {{
-                    y: {{ beginAtZero: true }}
-                }}
-            }}
-        }});
-    </script>
 </body>
 </html>
 """
