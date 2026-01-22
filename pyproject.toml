@@ -1,7 +1,7 @@
 [project]
 name = "pkglog"
 version = "0.1.0"
-description = "Add your description here"
+description = "Track PyPI package download statistics"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -10,7 +10,14 @@ dependencies = [
     "tabulate>=0.9.0",
 ]
 
+[project.scripts]
+pkglog = "pkglog:main"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
 ]
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
