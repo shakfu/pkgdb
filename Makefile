@@ -1,4 +1,4 @@
-NAME := "myapp"
+NAME := pkgdb
 
 .PHONY: all test sync update fetch report lint typecheck format qa \
 		build wheel sdist check publish publish-test clean reset

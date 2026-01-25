@@ -1,0 +1,37 @@
+"""Utility functions for pkgdb."""
+
+
+def calculate_growth(current: int | None, previous: int | None) -> float | None:
+    """Calculate percentage growth between two values."""
+    if previous is None or previous == 0:
+        return None
+    if current is None:
+        return None
+    return ((current - previous) / previous) * 100
+
+
+def make_sparkline(values: list[int], width: int = 7) -> str:
+    """Generate an ASCII sparkline from a list of values."""
+    if not values:
+        return " " * width
+
+    # Use last 'width' values
+    values = values[-width:]
+
+    # Pad with zeros if not enough values
+    if len(values) < width:
+        values = [0] * (width - len(values)) + values
+
+    blocks = " _.,:-=+*#"
+    min_val = min(values)
+    max_val = max(values)
+
+    if max_val == min_val:
+        return blocks[4] * width
+
+    sparkline = ""
+    for v in values:
+        idx = int((v - min_val) / (max_val - min_val) * (len(blocks) - 1))
+        sparkline += blocks[idx]
+
+    return sparkline

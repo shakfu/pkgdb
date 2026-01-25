@@ -37,7 +37,7 @@ published:
 pkgdb fetch
 
 # Display stats in terminal (includes trend sparklines and growth %)
-pkgdb list
+pkgdb show
 
 # Show historical stats for a specific package
 pkgdb history <package-name>
@@ -69,11 +69,11 @@ pkgdb update
 # Use custom database file
 pkgdb -d custom.db fetch
 
-# Use custom packages file
-pkgdb -p custom.yml fetch
-
 # Specify output file for report
 pkgdb report -o custom-report.html
+
+# Generate report without opening browser (useful for automation)
+pkgdb report --no-browser
 
 # Limit history output to N days
 pkgdb history my-package -n 14
@@ -84,7 +84,7 @@ pkgdb export -f json -o stats.json
 
 ## Architecture
 
-Single-file CLI application with seven commands:
+Modular CLI application with seven commands:
 
 - **fetch**: Calls `pypistats.recent()` and `pypistats.overall()` for each package, stores results in SQLite
 - **list**: Queries latest stats per package with trend sparklines and growth metrics
@@ -112,10 +112,19 @@ Stats are upserted per package per day, so running fetch multiple times on the s
 
 ## Files
 
-- `pkgdb.py`: Main CLI application
+Source modules in `src/pkgdb/`:
+- `__init__.py`: Public API and version
+- `cli.py`: CLI argument parsing and commands
+- `db.py`: Database operations
+- `api.py`: pypistats API wrapper
+- `reports.py`: HTML/SVG report generation
+- `export.py`: CSV/JSON/Markdown export
+- `utils.py`: Helper functions
+
+Data files:
 - `packages.yml`: Package list configuration
-- `pkg.db`: SQLite database (auto-created)
-- `report.html`: Generated HTML report (default output)
+- `~/.pkgdb/pkg.db`: SQLite database (auto-created)
+- `~/.pkgdb/report.html`: Generated HTML report (default output)
 
 ## Development
 

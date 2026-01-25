@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--no-browser` flag for `report` and `update` commands (useful for automation/cron)
+- Progress indicator during fetch: `[1/27] Fetching stats for package...`
+- Database context manager `get_db()` for safer resource handling
+- 24 new tests (93 total)
+
+### Changed
+
+- Modular architecture: split monolithic `__init__.py` into focused modules:
+  - `utils.py` - Helper functions (sparkline, growth calculation)
+  - `export.py` - CSV/JSON/Markdown export
+  - `api.py` - pypistats API wrapper functions
+  - `db.py` - Database operations and context manager
+  - `cli.py` - CLI argument parsing and commands
+  - `reports.py` - HTML/SVG report generation
+  - `__init__.py` - Public API re-exports
+- All CLI commands now use context manager for database connections
+
 ## [0.1.2]
 
 ### Added
