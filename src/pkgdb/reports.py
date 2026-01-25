@@ -7,6 +7,148 @@ from typing import Any
 from .api import fetch_python_versions, fetch_os_stats
 
 
+# -----------------------------------------------------------------------------
+# CSS Styles
+# -----------------------------------------------------------------------------
+
+
+def _get_common_styles() -> str:
+    """Return CSS styles shared by all reports."""
+    return """
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1, h2, h3 {
+            color: #333;
+        }
+        .chart-container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #4a90a4;
+            color: white;
+        }
+        tr:hover {
+            background: #f9f9f9;
+        }
+        .number {
+            text-align: right;
+            font-family: monospace;
+        }
+        .generated {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 20px;
+        }
+        .pie-charts-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 40px;
+            justify-content: flex-start;
+        }
+        .pie-chart-wrapper {
+            flex: 0 0 auto;
+        }
+        .pie-chart-wrapper h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #555;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #4a90a4;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        a {
+            color: #4a90a4;
+        }
+    """
+
+
+# -----------------------------------------------------------------------------
+# HTML Template
+# -----------------------------------------------------------------------------
+
+
+def _render_html_document(
+    title: str, body_content: str, styles: str | None = None
+) -> str:
+    """Render a complete HTML document.
+
+    Args:
+        title: Page title.
+        body_content: HTML content for the body.
+        styles: Optional CSS styles. Defaults to common styles.
+
+    Returns:
+        Complete HTML document as string.
+    """
+    if styles is None:
+        styles = _get_common_styles()
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>{styles}</style>
+</head>
+<body>
+{body_content}
+    <p class="generated">Generated on {timestamp}</p>
+</body>
+</html>
+"""
+
+
+# -----------------------------------------------------------------------------
+# SVG Chart Components
+# -----------------------------------------------------------------------------
+
+
 def make_svg_pie_chart(
     data: list[tuple[str, int]], chart_id: str, size: int = 200
 ) -> str:
@@ -118,15 +260,96 @@ def _make_svg_bar_chart(data: list[tuple[str, int]], title: str, chart_id: str) 
     return "\n".join(svg_parts)
 
 
-def _make_svg_line_chart(
-    history_data: dict[str, list[dict[str, Any]]] | None, chart_id: str
+def _make_single_line_chart(
+    dates: list[str],
+    values: list[int],
+    chart_width: int = 600,
+    chart_height: int = 200,
+    color: str = "hsl(200, 70%, 50%)",
 ) -> str:
-    """Generate an SVG line chart showing downloads over time."""
+    """Generate an SVG line chart for a single data series.
+
+    Args:
+        dates: List of date strings for x-axis.
+        values: List of values for y-axis.
+        chart_width: Width of the chart in pixels.
+        chart_height: Height of the chart in pixels.
+        color: Line color (CSS color string).
+
+    Returns:
+        SVG string, or empty string if insufficient data.
+    """
+    if len(dates) < 2 or len(values) < 2:
+        return ""
+
+    margin = {"top": 20, "right": 20, "bottom": 40, "left": 80}
+    plot_width = chart_width - margin["left"] - margin["right"]
+    plot_height = chart_height - margin["top"] - margin["bottom"]
+    max_val = max(values) or 1
+
+    svg_parts = [
+        f'<svg viewBox="0 0 {chart_width} {chart_height}" '
+        f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+    ]
+
+    # Y-axis labels and grid lines
+    for i in range(5):
+        y_val = max_val * (4 - i) / 4
+        y_pos = margin["top"] + (i * plot_height / 4)
+        svg_parts.append(
+            f'<text x="{margin["left"] - 8}" y="{y_pos + 4}" '
+            f'text-anchor="end" fill="#666">{int(y_val):,}</text>'
+        )
+        svg_parts.append(
+            f'<line x1="{margin["left"]}" y1="{y_pos}" '
+            f'x2="{chart_width - margin["right"]}" y2="{y_pos}" '
+            f'stroke="#eee" stroke-width="1"/>'
+        )
+
+    # X-axis labels (first, middle, last)
+    for idx in [0, len(dates) // 2, len(dates) - 1]:
+        x_pos = margin["left"] + (idx / (len(dates) - 1)) * plot_width
+        svg_parts.append(
+            f'<text x="{x_pos}" y="{chart_height - 10}" '
+            f'text-anchor="middle" fill="#666">{dates[idx]}</text>'
+        )
+
+    # Line
+    points = []
+    for i, val in enumerate(values):
+        x = margin["left"] + (i / max(1, len(values) - 1)) * plot_width
+        y = margin["top"] + plot_height - (val / max_val) * plot_height
+        points.append(f"{x:.1f},{y:.1f}")
+
+    svg_parts.append(
+        f'<polyline points="{" ".join(points)}" '
+        f'fill="none" stroke="{color}" stroke-width="2"/>'
+    )
+    svg_parts.append("</svg>")
+
+    return "\n".join(svg_parts)
+
+
+def _make_multi_line_chart(
+    history_data: dict[str, list[dict[str, Any]]] | None,
+    chart_id: str,
+    max_lines: int = 5,
+) -> str:
+    """Generate an SVG line chart showing multiple packages over time.
+
+    Args:
+        history_data: Dict mapping package names to their history records.
+        chart_id: SVG element ID.
+        max_lines: Maximum number of packages to show.
+
+    Returns:
+        SVG string, or message if insufficient data.
+    """
     if not history_data:
         return ""
 
     # Collect all dates and find date range
-    all_dates = set()
+    all_dates: set[str] = set()
     for pkg_history in history_data.values():
         for h in pkg_history:
             all_dates.add(h["fetch_date"])
@@ -192,12 +415,12 @@ def _make_svg_line_chart(
                 f'text-anchor="middle" fill="#666">{sorted_dates[idx]}</text>'
             )
 
-    # Draw lines for each package (top 5 by total)
+    # Draw lines for top packages by total
     top_packages = sorted(
         history_data.keys(),
         key=lambda p: max((h["total"] or 0) for h in history_data[p]),
         reverse=True,
-    )[:5]
+    )[:max_lines]
 
     for pkg_idx, pkg in enumerate(top_packages):
         pkg_history = sorted(history_data[pkg], key=lambda h: h["fetch_date"])
@@ -241,97 +464,51 @@ def _make_svg_line_chart(
     return "\n".join(svg_parts)
 
 
-def _get_common_styles() -> str:
-    """Return CSS styles shared by all reports."""
-    return """
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
-            background: #f5f5f5;
-        }
-        h1, h2, h3 {
-            color: #333;
-        }
-        .chart-container {
-            background: white;
-            border-radius: 8px;
-            padding: 20px;
-            margin: 20px 0;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            overflow-x: auto;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            background: white;
-            border-radius: 8px;
-            overflow: hidden;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        th, td {
-            padding: 12px;
-            text-align: left;
-            border-bottom: 1px solid #eee;
-        }
-        th {
-            background: #4a90a4;
-            color: white;
-        }
-        tr:hover {
-            background: #f9f9f9;
-        }
-        .number {
-            text-align: right;
-            font-family: monospace;
-        }
-        .generated {
-            color: #666;
-            font-size: 0.9em;
-            margin-top: 20px;
-        }
-        .pie-charts-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 40px;
-            justify-content: flex-start;
-        }
-        .pie-chart-wrapper {
-            flex: 0 0 auto;
-        }
-        .pie-chart-wrapper h3 {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: #555;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin: 20px 0;
-        }
-        .stat-card {
-            background: white;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            text-align: center;
-        }
-        .stat-value {
-            font-size: 24px;
-            font-weight: bold;
-            color: #4a90a4;
-        }
-        .stat-label {
-            font-size: 12px;
-            color: #666;
-            margin-top: 5px;
-        }
-        a {
-            color: #4a90a4;
-        }
+# -----------------------------------------------------------------------------
+# Environment Charts Helper
+# -----------------------------------------------------------------------------
+
+
+def _build_env_charts(
+    py_versions: list[dict[str, Any]] | None,
+    os_stats: list[dict[str, Any]] | None,
+    size: int = 220,
+) -> tuple[str, str]:
+    """Build pie charts for Python versions and OS distribution.
+
+    Args:
+        py_versions: Python version data from API.
+        os_stats: OS stats data from API.
+        size: Pie chart size in pixels.
+
+    Returns:
+        Tuple of (py_version_chart_html, os_chart_html).
     """
+    py_version_chart = ""
+    if py_versions:
+        py_data = [
+            (v.get("category", "unknown"), v.get("downloads", 0))
+            for v in py_versions
+            if v.get("category") and v.get("category") != "null"
+        ]
+        py_version_chart = make_svg_pie_chart(py_data, "py-version-chart", size=size)
+
+    os_chart = ""
+    if os_stats:
+        os_data = []
+        for s in os_stats:
+            name = s.get("category", "unknown")
+            if name == "null":
+                name = "Unknown"
+            os_data.append((name, s.get("downloads", 0)))
+        os_chart = make_svg_pie_chart(os_data, "os-chart", size=size)
+
+    return py_version_chart, os_chart
+
+
+# -----------------------------------------------------------------------------
+# Public Report Generation Functions
+# -----------------------------------------------------------------------------
 
 
 def generate_html_report(
@@ -347,57 +524,59 @@ def generate_html_report(
         stats: List of package statistics
         output_file: Path to write HTML file
         history: Historical data for time-series chart
-        packages: List of package names (for fetching env data if env_summary not provided)
+        packages: List of package names (unused, kept for compatibility)
         env_summary: Pre-fetched Python version and OS summary data
     """
     if not stats:
         print("No statistics available to generate report.")
         return
 
+    # Build charts
     totals_data = [(s["package_name"], s["total"] or 0) for s in stats]
     month_data = [(s["package_name"], s["last_month"] or 0) for s in stats]
 
     totals_chart = _make_svg_bar_chart(totals_data, "Total Downloads", "totals-chart")
     month_chart = _make_svg_bar_chart(month_data, "Last Month", "month-chart")
     time_series_chart = (
-        _make_svg_line_chart(history, "time-series-chart") if history else ""
+        _make_multi_line_chart(history, "time-series-chart") if history else ""
     )
 
-    # Generate environment summary charts if data available
-    py_version_chart = ""
-    os_chart = ""
+    # Environment summary charts
+    env_summary_html = ""
     if env_summary:
         py_data = env_summary.get("python_versions", [])
-        if py_data:
-            py_version_chart = make_svg_pie_chart(py_data, "py-version-chart", size=200)
         os_data = env_summary.get("os_distribution", [])
-        if os_data:
-            os_chart = make_svg_pie_chart(os_data, "os-chart", size=200)
+        py_chart = (
+            make_svg_pie_chart(py_data, "py-version-chart", size=200) if py_data else ""
+        )
+        os_chart = make_svg_pie_chart(os_data, "os-chart", size=200) if os_data else ""
 
-    env_summary_html = ""
-    if py_version_chart or os_chart:
-        env_summary_html = f"""
+        if py_chart or os_chart:
+            env_summary_html = f"""
     <div class="chart-container">
         <h2>Environment Summary (Aggregated)</h2>
         <div class="pie-charts-row">
-            {f'<div class="pie-chart-wrapper"><h3>Python Versions</h3>{py_version_chart}</div>' if py_version_chart else ""}
+            {f'<div class="pie-chart-wrapper"><h3>Python Versions</h3>{py_chart}</div>' if py_chart else ""}
             {f'<div class="pie-chart-wrapper"><h3>Operating Systems</h3>{os_chart}</div>' if os_chart else ""}
         </div>
     </div>
 """
 
-    styles = _get_common_styles()
+    # Build stats table rows
+    table_rows = ""
+    for i, s in enumerate(stats, 1):
+        table_rows += f"""            <tr>
+                <td>{i}</td>
+                <td><a href="https://pypi.org/project/{s["package_name"]}/">{s["package_name"]}</a></td>
+                <td class="number">{s["total"] or 0:,}</td>
+                <td class="number">{s["last_month"] or 0:,}</td>
+                <td class="number">{s["last_week"] or 0:,}</td>
+                <td class="number">{s["last_day"] or 0:,}</td>
+            </tr>
+"""
 
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PyPI Package Download Statistics</title>
-    <style>{styles}</style>
-</head>
-<body>
-    <h1>PyPI Package Download Statistics</h1>
+    # Build body content
+    body_content = f"""    <h1>PyPI Package Download Statistics</h1>
 
     <div class="chart-container">
         <h2>Total Downloads by Package</h2>
@@ -426,26 +605,11 @@ def generate_html_report(
             </tr>
         </thead>
         <tbody>
-"""
-
-    for i, s in enumerate(stats, 1):
-        html += f"""            <tr>
-                <td>{i}</td>
-                <td><a href="https://pypi.org/project/{s["package_name"]}/">{s["package_name"]}</a></td>
-                <td class="number">{s["total"] or 0:,}</td>
-                <td class="number">{s["last_month"] or 0:,}</td>
-                <td class="number">{s["last_week"] or 0:,}</td>
-                <td class="number">{s["last_day"] or 0:,}</td>
-            </tr>
-"""
-
-    html += f"""        </tbody>
+{table_rows}        </tbody>
     </table>
-
-    <p class="generated">Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-</body>
-</html>
 """
+
+    html = _render_html_document("PyPI Package Download Statistics", body_content)
 
     with open(output_file, "w") as f:
         f.write(html)
@@ -474,99 +638,21 @@ def generate_package_html_report(
         print(f"Could not fetch stats for {package}")
         return
 
-    # Fetch environment data
+    # Fetch environment data and build charts
     py_versions = fetch_python_versions(package)
     os_stats = fetch_os_stats(package)
+    py_version_chart, os_chart = _build_env_charts(py_versions, os_stats, size=220)
 
-    # Build pie charts
-    py_version_chart = ""
-    if py_versions:
-        py_data = [
-            (v.get("category", "unknown"), v.get("downloads", 0))
-            for v in py_versions
-            if v.get("category") and v.get("category") != "null"
-        ]
-        py_version_chart = make_svg_pie_chart(py_data, "py-version-chart", size=220)
-
-    os_chart = ""
-    if os_stats:
-        os_data = []
-        for s in os_stats:
-            name = s.get("category", "unknown")
-            if name == "null":
-                name = "Unknown"
-            os_data.append((name, s.get("downloads", 0)))
-        os_chart = make_svg_pie_chart(os_data, "os-chart", size=220)
-
-    # Build history chart if available
+    # Build history chart
     history_chart = ""
     if history and len(history) >= 2:
-        # Create line chart from history
-        chart_width = 600
-        chart_height = 200
-        margin = {"top": 20, "right": 20, "bottom": 40, "left": 80}
-        plot_width = chart_width - margin["left"] - margin["right"]
-        plot_height = chart_height - margin["top"] - margin["bottom"]
-
         sorted_history = sorted(history, key=lambda h: h["fetch_date"])
         dates = [h["fetch_date"] for h in sorted_history]
         values = [h["total"] or 0 for h in sorted_history]
-        max_val = max(values) or 1
+        history_chart = _make_single_line_chart(dates, values)
 
-        svg_parts = [
-            f'<svg viewBox="0 0 {chart_width} {chart_height}" '
-            f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
-        ]
-
-        # Y-axis
-        for i in range(5):
-            y_val = max_val * (4 - i) / 4
-            y_pos = margin["top"] + (i * plot_height / 4)
-            svg_parts.append(
-                f'<text x="{margin["left"] - 8}" y="{y_pos + 4}" '
-                f'text-anchor="end" fill="#666">{int(y_val):,}</text>'
-            )
-            svg_parts.append(
-                f'<line x1="{margin["left"]}" y1="{y_pos}" '
-                f'x2="{chart_width - margin["right"]}" y2="{y_pos}" '
-                f'stroke="#eee" stroke-width="1"/>'
-            )
-
-        # X-axis labels
-        if len(dates) > 1:
-            for idx in [0, len(dates) // 2, len(dates) - 1]:
-                x_pos = margin["left"] + (idx / (len(dates) - 1)) * plot_width
-                svg_parts.append(
-                    f'<text x="{x_pos}" y="{chart_height - 10}" '
-                    f'text-anchor="middle" fill="#666">{dates[idx]}</text>'
-                )
-
-        # Line
-        points = []
-        for i, val in enumerate(values):
-            x = margin["left"] + (i / max(1, len(values) - 1)) * plot_width
-            y = margin["top"] + plot_height - (val / max_val) * plot_height
-            points.append(f"{x:.1f},{y:.1f}")
-
-        svg_parts.append(
-            f'<polyline points="{" ".join(points)}" '
-            f'fill="none" stroke="hsl(200, 70%, 50%)" stroke-width="2"/>'
-        )
-        svg_parts.append("</svg>")
-        history_chart = "\n".join(svg_parts)
-
-    styles = _get_common_styles()
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{package} - Download Statistics</title>
-    <style>{styles}</style>
-</head>
-<body>
-    <h1>{package}</h1>
+    # Build body content
+    body_content = f"""    <h1>{package}</h1>
     <p><a href="https://pypi.org/project/{package}/">View on PyPI</a></p>
 
     <div class="stats-grid">
@@ -597,11 +683,9 @@ def generate_package_html_report(
             {f'<div class="pie-chart-wrapper"><h3>Operating Systems</h3>{os_chart}</div>' if os_chart else "<p>OS data not available</p>"}
         </div>
     </div>
-
-    <p class="generated">Generated on {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-</body>
-</html>
 """
+
+    html = _render_html_document(f"{package} - Download Statistics", body_content)
 
     with open(output_file, "w") as f:
         f.write(html)

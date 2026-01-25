@@ -9,22 +9,8 @@ import webbrowser
 import yaml
 from tabulate import tabulate
 
-from .api import aggregate_env_stats, fetch_package_stats
-from .db import (
-    DEFAULT_DB_FILE,
-    DEFAULT_REPORT_FILE,
-    add_package,
-    get_all_history,
-    get_db,
-    get_latest_stats,
-    get_package_history,
-    get_packages,
-    get_stats_with_growth,
-    remove_package,
-    store_stats,
-)
-from .export import export_csv, export_json, export_markdown
-from .reports import generate_html_report, generate_package_html_report
+from .db import DEFAULT_DB_FILE, DEFAULT_REPORT_FILE
+from .service import PackageStatsService
 from .utils import make_sparkline
 
 
@@ -81,7 +67,12 @@ def import_packages_from_file(conn: Any, file_path: str) -> tuple[int, int]:
 
     Supports YAML, JSON, and plain text formats.
     Returns tuple of (added_count, skipped_count).
+
+    Note: This function is kept for backward compatibility.
+    Prefer using PackageStatsService.import_packages() instead.
     """
+    from .db import add_package
+
     packages = load_packages_from_file(file_path)
     added = 0
     skipped = 0
@@ -95,78 +86,49 @@ def import_packages_from_file(conn: Any, file_path: str) -> tuple[int, int]:
 
 def cmd_fetch(args: argparse.Namespace) -> None:
     """Fetch command: download stats and store in database."""
-    with get_db(args.database) as conn:
-        packages = get_packages(conn)
-        if not packages:
-            print("No packages are being tracked.")
+    service = PackageStatsService(args.database)
+    packages = service.list_packages()
+
+    if not packages:
+        print("No packages are being tracked.")
+        print(
+            "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
+        )
+        return
+
+    total = len(packages)
+    print(f"Fetching stats for {total} tracked packages...")
+
+    def on_progress(
+        current: int, total: int, package: str, stats: dict[str, Any] | None
+    ) -> None:
+        print(f"[{current}/{total}] Fetching stats for {package}...")
+        if stats:
             print(
-                "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
+                f"  Total: {stats['total']:,} | Month: {stats['last_month']:,} | "
+                f"Week: {stats['last_week']:,} | Day: {stats['last_day']:,}"
             )
-            return
 
-        total = len(packages)
-        print(f"Fetching stats for {total} tracked packages...")
-
-        for i, package in enumerate(packages, 1):
-            print(f"[{i}/{total}] Fetching stats for {package}...")
-            stats = fetch_package_stats(package)
-            if stats:
-                store_stats(conn, package, stats)
-                print(
-                    f"  Total: {stats['total']:,} | Month: {stats['last_month']:,} | "
-                    f"Week: {stats['last_week']:,} | Day: {stats['last_day']:,}"
-                )
-
-        print("Done.")
+    result = service.fetch_all_stats(progress_callback=on_progress)
+    print(f"Done. ({result.success} succeeded, {result.failed} failed)")
 
 
 def cmd_report(args: argparse.Namespace) -> None:
-    """Report command: generate HTML report from stored data.
-
-    If a package name is provided, generates a detailed report for that package.
-    Otherwise, generates a summary report for all packages.
-    """
-    # Check if single-package report requested
+    """Report command: generate HTML report from stored data."""
+    service = PackageStatsService(args.database)
     package = getattr(args, "package", None)
     no_browser = getattr(args, "no_browser", False)
 
-    with get_db(args.database) as conn:
-        if package:
-            # Single package detailed report
-            pkg_history = get_package_history(conn, package, limit=30)
+    if package:
+        service.generate_package_report(package, args.output)
+    else:
+        include_env = getattr(args, "env", False)
+        if include_env:
+            print("Fetching environment data (this may take a moment)...")
 
-            # Find stats in database or fetch fresh
-            pkg_stats: dict[str, Any] | None = None
-            for h in pkg_history:
-                if h["package_name"] == package:
-                    pkg_stats = {
-                        "total": h["total"],
-                        "last_month": h["last_month"],
-                        "last_week": h["last_week"],
-                        "last_day": h["last_day"],
-                    }
-                    break
-
-            generate_package_html_report(
-                package, args.output, stats=pkg_stats, history=pkg_history
-            )
-        else:
-            # Summary report for all packages
-            stats = get_latest_stats(conn)
-            all_history = get_all_history(conn, limit_per_package=30)
-            packages = [s["package_name"] for s in stats]
-
-            if not stats:
-                print("No data in database. Run 'fetch' first.")
-                return
-
-            # Fetch environment summary (aggregated across all packages)
-            env_summary: dict[str, list[tuple[str, int]]] | None = None
-            if args.env:
-                print("Fetching environment data (this may take a moment)...")
-                env_summary = aggregate_env_stats(packages)
-
-            generate_html_report(stats, args.output, all_history, packages, env_summary)
+        if not service.generate_report(args.output, include_env=include_env):
+            print("No data in database. Run 'fetch' first.")
+            return
 
     if not no_browser:
         print("Opening report in browser...")
@@ -176,7 +138,6 @@ def cmd_report(args: argparse.Namespace) -> None:
 def cmd_update(args: argparse.Namespace) -> None:
     """Sync command: fetch stats then generate report."""
     cmd_fetch(args)
-    # Ensure env attribute exists for cmd_report
     if not hasattr(args, "env"):
         args.env = False
     cmd_report(args)
@@ -184,176 +145,160 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 def cmd_show(args: argparse.Namespace) -> None:
     """Show command: display stored statistics in terminal."""
-    with get_db(args.database) as conn:
-        stats = get_stats_with_growth(conn)
-        history = get_all_history(conn, limit_per_package=14)
+    service = PackageStatsService(args.database)
+    stats = service.get_stats(with_growth=True)
 
-        if not stats:
-            print("No data in database. Run 'fetch' first.")
-            return
+    if not stats:
+        print("No data in database. Run 'fetch' first.")
+        return
 
-        rows = []
-        for i, s in enumerate(stats, 1):
-            pkg = s["package_name"]
-            pkg_history = history.get(pkg, [])
-            totals = [h["total"] or 0 for h in pkg_history]
-            sparkline = make_sparkline(totals, width=7)
+    history = service.get_all_history(limit_per_package=14)
 
-            growth_str = ""
-            if s.get("month_growth") is not None:
-                g = s["month_growth"]
-                sign = "+" if g >= 0 else ""
-                growth_str = f"{sign}{g:.1f}%"
+    rows = []
+    for i, s in enumerate(stats, 1):
+        pkg = s["package_name"]
+        pkg_history = history.get(pkg, [])
+        totals = [h["total"] or 0 for h in pkg_history]
+        sparkline = make_sparkline(totals, width=7)
 
-            rows.append(
-                [
-                    i,
-                    pkg,
-                    f"{s['total'] or 0:,}",
-                    f"{s['last_month'] or 0:,}",
-                    f"{s['last_week'] or 0:,}",
-                    f"{s['last_day'] or 0:,}",
-                    sparkline,
-                    growth_str,
-                ]
-            )
+        growth_str = ""
+        if s.get("month_growth") is not None:
+            g = s["month_growth"]
+            sign = "+" if g >= 0 else ""
+            growth_str = f"{sign}{g:.1f}%"
 
-        headers = ["#", "Package", "Total", "Month", "Week", "Day", "Trend", "Growth"]
-        print(tabulate(rows, headers=headers, tablefmt="simple"))
+        rows.append(
+            [
+                i,
+                pkg,
+                f"{s['total'] or 0:,}",
+                f"{s['last_month'] or 0:,}",
+                f"{s['last_week'] or 0:,}",
+                f"{s['last_day'] or 0:,}",
+                sparkline,
+                growth_str,
+            ]
+        )
+
+    headers = ["#", "Package", "Total", "Month", "Week", "Day", "Trend", "Growth"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
 def cmd_list(args: argparse.Namespace) -> None:
     """List command: show tracked packages."""
-    with get_db(args.database) as conn:
-        packages = get_packages(conn)
+    service = PackageStatsService(args.database)
+    packages = service.list_packages()
 
-        if not packages:
-            print("No packages are being tracked.")
-            print(
-                "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
-            )
-            return
-
-        # Get added dates for each package
-        cursor = conn.execute(
-            "SELECT package_name, added_date FROM packages ORDER BY package_name"
+    if not packages:
+        print("No packages are being tracked.")
+        print(
+            "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
         )
-        pkg_data = {row["package_name"]: row["added_date"] for row in cursor.fetchall()}
+        return
 
-        print(f"Tracking {len(packages)} packages:\n")
+    print(f"Tracking {len(packages)} packages:\n")
 
-        rows = [[pkg, pkg_data.get(pkg, "")] for pkg in packages]
-        headers = ["Package", "Added"]
-        print(tabulate(rows, headers=headers, tablefmt="simple"))
+    rows = [[pkg.name, pkg.added_date] for pkg in packages]
+    headers = ["Package", "Added"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
 def cmd_add(args: argparse.Namespace) -> None:
     """Add command: add a package to tracking."""
-    with get_db(args.database) as conn:
-        if add_package(conn, args.name):
-            print(f"Added '{args.name}' to tracking.")
-        else:
-            print(f"Package '{args.name}' is already being tracked.")
+    service = PackageStatsService(args.database)
+    if service.add_package(args.name):
+        print(f"Added '{args.name}' to tracking.")
+    else:
+        print(f"Package '{args.name}' is already being tracked.")
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
     """Remove command: remove a package from tracking."""
-    with get_db(args.database) as conn:
-        if remove_package(conn, args.name):
-            print(f"Removed '{args.name}' from tracking.")
-        else:
-            print(f"Package '{args.name}' was not being tracked.")
+    service = PackageStatsService(args.database)
+    if service.remove_package(args.name):
+        print(f"Removed '{args.name}' from tracking.")
+    else:
+        print(f"Package '{args.name}' was not being tracked.")
 
 
 def cmd_import(args: argparse.Namespace) -> None:
     """Import command: import packages from file (YAML, JSON, or text)."""
-    with get_db(args.database) as conn:
-        try:
-            added, skipped = import_packages_from_file(conn, args.file)
-            print(f"Imported {added} packages ({skipped} already tracked).")
-        except FileNotFoundError:
-            print(f"File not found: {args.file}")
+    service = PackageStatsService(args.database)
+    try:
+        added, skipped = service.import_packages(args.file)
+        print(f"Imported {added} packages ({skipped} already tracked).")
+    except FileNotFoundError:
+        print(f"File not found: {args.file}")
 
 
 def cmd_history(args: argparse.Namespace) -> None:
     """History command: show historical stats for a package."""
-    with get_db(args.database) as conn:
-        history = get_package_history(conn, args.package, limit=args.limit)
+    service = PackageStatsService(args.database)
+    history = service.get_history(args.package, limit=args.limit)
 
-        if not history:
-            print(f"No data found for package '{args.package}'.")
-            return
+    if not history:
+        print(f"No data found for package '{args.package}'.")
+        return
 
-        print(f"Historical stats for {args.package}\n")
+    print(f"Historical stats for {args.package}\n")
 
-        rows = []
-        for h in reversed(history):
-            rows.append(
-                [
-                    h["fetch_date"],
-                    f"{h['total'] or 0:,}",
-                    f"{h['last_month'] or 0:,}",
-                    f"{h['last_week'] or 0:,}",
-                    f"{h['last_day'] or 0:,}",
-                ]
-            )
+    rows = []
+    for h in reversed(history):
+        rows.append(
+            [
+                h["fetch_date"],
+                f"{h['total'] or 0:,}",
+                f"{h['last_month'] or 0:,}",
+                f"{h['last_week'] or 0:,}",
+                f"{h['last_day'] or 0:,}",
+            ]
+        )
 
-        headers = ["Date", "Total", "Month", "Week", "Day"]
-        print(tabulate(rows, headers=headers, tablefmt="simple"))
+    headers = ["Date", "Total", "Month", "Week", "Day"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
 def cmd_export(args: argparse.Namespace) -> None:
     """Export command: export stats in various formats."""
-    with get_db(args.database) as conn:
-        stats = get_latest_stats(conn)
+    service = PackageStatsService(args.database)
 
-        if not stats:
-            print("No data in database. Run 'fetch' first.")
-            return
+    try:
+        output = service.export(args.format)
+    except ValueError as e:
+        print(str(e))
+        return
 
-        # Generate export based on format
-        if args.format == "csv":
-            output = export_csv(stats)
-        elif args.format == "json":
-            output = export_json(stats)
-        elif args.format == "markdown" or args.format == "md":
-            output = export_markdown(stats)
-        else:
-            print(f"Unknown format: {args.format}")
-            return
+    if output is None:
+        print("No data in database. Run 'fetch' first.")
+        return
 
-        # Write to file or stdout
-        if args.output:
-            with open(args.output, "w") as f:
-                f.write(output)
-            print(f"Exported to {args.output}")
-        else:
-            print(output)
+    if args.output:
+        with open(args.output, "w") as f:
+            f.write(output)
+        print(f"Exported to {args.output}")
+    else:
+        print(output)
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
     """Stats command: show detailed statistics for a package."""
-    from .api import fetch_os_stats, fetch_python_versions
+    service = PackageStatsService(args.database)
+    details = service.fetch_package_details(args.package)
 
-    package = args.package
-    print(f"Fetching detailed stats for {package}...\n")
+    print(f"Fetching detailed stats for {args.package}...\n")
 
-    # Fetch basic stats
-    basic = fetch_package_stats(package)
-    if basic:
+    if details.stats:
         print("=== Download Summary ===")
-        print(f"  Total:      {basic['total']:>12,}")
-        print(f"  Last month: {basic['last_month']:>12,}")
-        print(f"  Last week:  {basic['last_week']:>12,}")
-        print(f"  Last day:   {basic['last_day']:>12,}")
+        print(f"  Total:      {details.stats['total']:>12,}")
+        print(f"  Last month: {details.stats['last_month']:>12,}")
+        print(f"  Last week:  {details.stats['last_week']:>12,}")
+        print(f"  Last day:   {details.stats['last_day']:>12,}")
         print()
 
-    # Fetch Python version breakdown
-    py_versions = fetch_python_versions(package)
-    if py_versions:
+    if details.python_versions:
         print("=== Python Version Distribution ===")
-        total_downloads = sum(v.get("downloads", 0) for v in py_versions)
-        for v in py_versions[:10]:  # Top 10
+        total_downloads = sum(v.get("downloads", 0) for v in details.python_versions)
+        for v in details.python_versions[:10]:
             version = v.get("category", "unknown")
             downloads = v.get("downloads", 0)
             pct = (downloads / total_downloads * 100) if total_downloads > 0 else 0
@@ -361,12 +306,10 @@ def cmd_stats(args: argparse.Namespace) -> None:
             print(f"  Python {version:<6} {downloads:>12,} ({pct:>5.1f}%) {bar}")
         print()
 
-    # Fetch OS breakdown
-    os_stats = fetch_os_stats(package)
-    if os_stats:
+    if details.os_stats:
         print("=== Operating System Distribution ===")
-        total_downloads = sum(s.get("downloads", 0) for s in os_stats)
-        for s in os_stats:
+        total_downloads = sum(s.get("downloads", 0) for s in details.os_stats)
+        for s in details.os_stats:
             os_name = s.get("category", "unknown")
             if os_name == "null":
                 os_name = "Unknown"

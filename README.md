@@ -115,6 +115,7 @@ Stats are upserted per package per day, so running fetch multiple times on the s
 Source modules in `src/pkgdb/`:
 - `__init__.py`: Public API and version
 - `cli.py`: CLI argument parsing and commands
+- `service.py`: High-level service layer
 - `db.py`: Database operations
 - `api.py`: pypistats API wrapper
 - `reports.py`: HTML/SVG report generation

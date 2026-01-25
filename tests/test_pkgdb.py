@@ -40,6 +40,10 @@ from pkgdb import (
     DEFAULT_DB_FILE,
     DEFAULT_PACKAGES_FILE,
     DEFAULT_REPORT_FILE,
+    PackageStatsService,
+    PackageInfo,
+    FetchResult,
+    PackageDetails,
 )
 
 
@@ -1504,5 +1508,241 @@ class TestPackageHTMLReport:
             content = Path(output_path).read_text()
             assert "Downloads Over Time" in content
             assert "polyline" in content  # SVG line element
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
+
+class TestPackageStatsService:
+    """Tests for the PackageStatsService abstraction layer."""
+
+    def test_service_add_and_remove_package(self, temp_db):
+        """Service should add and remove packages."""
+        service = PackageStatsService(temp_db)
+
+        # Add package
+        assert service.add_package("test-package") is True
+        assert service.add_package("test-package") is False  # Already exists
+
+        # List packages
+        packages = service.list_packages()
+        assert len(packages) == 1
+        assert packages[0].name == "test-package"
+        assert isinstance(packages[0], PackageInfo)
+
+        # Remove package
+        assert service.remove_package("test-package") is True
+        assert service.remove_package("test-package") is False  # Already removed
+
+        assert service.list_packages() == []
+
+    def test_service_import_packages(self, temp_db, temp_packages_file):
+        """Service should import packages from file."""
+        service = PackageStatsService(temp_db)
+
+        added, skipped = service.import_packages(temp_packages_file)
+        assert added == 2
+        assert skipped == 0
+
+        packages = service.list_packages()
+        assert len(packages) == 2
+
+    def test_service_fetch_all_stats(self, temp_db):
+        """Service should fetch and store stats for all packages."""
+        service = PackageStatsService(temp_db)
+        service.add_package("test-pkg")
+
+        recent_response = json.dumps({
+            "data": {"last_day": 100, "last_week": 700, "last_month": 3000}
+        })
+        overall_response = json.dumps({
+            "data": [{"category": "without_mirrors", "downloads": 50000}]
+        })
+
+        progress_calls = []
+
+        def on_progress(current, total, package, stats):
+            progress_calls.append((current, total, package, stats))
+
+        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
+                result = service.fetch_all_stats(progress_callback=on_progress)
+
+        assert isinstance(result, FetchResult)
+        assert result.success == 1
+        assert result.failed == 0
+        assert "test-pkg" in result.results
+        assert result.results["test-pkg"]["total"] == 50000
+
+        # Progress callback should have been called
+        assert len(progress_calls) == 1
+        assert progress_calls[0][0] == 1  # current
+        assert progress_calls[0][1] == 1  # total
+        assert progress_calls[0][2] == "test-pkg"  # package
+
+    def test_service_get_stats(self, temp_db):
+        """Service should retrieve stats."""
+        service = PackageStatsService(temp_db)
+
+        # Empty initially
+        assert service.get_stats() == []
+
+        # Add some data
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        stats = service.get_stats()
+        assert len(stats) == 1
+        assert stats[0]["package_name"] == "test-pkg"
+
+    def test_service_get_history(self, temp_db):
+        """Service should retrieve package history."""
+        service = PackageStatsService(temp_db)
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES
+            ('test-pkg', '2024-01-01', 10, 70, 300, 1000),
+            ('test-pkg', '2024-01-02', 20, 140, 600, 2000)
+        """)
+        conn.commit()
+        conn.close()
+
+        history = service.get_history("test-pkg", limit=10)
+        assert len(history) == 2
+
+    def test_service_export(self, temp_db):
+        """Service should export stats in various formats."""
+        service = PackageStatsService(temp_db)
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        # CSV
+        csv_output = service.export("csv")
+        assert csv_output is not None
+        assert "test-pkg" in csv_output
+
+        # JSON
+        json_output = service.export("json")
+        assert json_output is not None
+        data = json.loads(json_output)
+        assert data["packages"][0]["name"] == "test-pkg"
+
+        # Markdown
+        md_output = service.export("markdown")
+        assert md_output is not None
+        assert "| Rank |" in md_output
+
+    def test_service_export_empty(self, temp_db):
+        """Service should return None for empty export."""
+        service = PackageStatsService(temp_db)
+        assert service.export("csv") is None
+
+    def test_service_export_invalid_format(self, temp_db):
+        """Service should raise ValueError for invalid format."""
+        service = PackageStatsService(temp_db)
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(ValueError, match="Unknown format"):
+            service.export("invalid")
+
+    def test_service_fetch_package_details(self, temp_db):
+        """Service should fetch detailed package info."""
+        service = PackageStatsService(temp_db)
+
+        recent_response = json.dumps({
+            "data": {"last_day": 100, "last_week": 700, "last_month": 3000}
+        })
+        overall_response = json.dumps({
+            "data": [{"category": "without_mirrors", "downloads": 50000}]
+        })
+        python_response = json.dumps({
+            "data": [{"category": "3.11", "downloads": 2000}]
+        })
+        system_response = json.dumps({
+            "data": [{"category": "Linux", "downloads": 4000}]
+        })
+
+        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
+                with patch("pkgdb.api.pypistats.python_minor", return_value=python_response):
+                    with patch("pkgdb.api.pypistats.system", return_value=system_response):
+                        details = service.fetch_package_details("test-pkg")
+
+        assert isinstance(details, PackageDetails)
+        assert details.name == "test-pkg"
+        assert details.stats is not None
+        assert details.stats["total"] == 50000
+        assert details.python_versions is not None
+        assert len(details.python_versions) == 1
+        assert details.os_stats is not None
+        assert len(details.os_stats) == 1
+
+    def test_service_generate_report(self, temp_db):
+        """Service should generate HTML report."""
+        service = PackageStatsService(temp_db)
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False
+        ) as f:
+            output_path = f.name
+
+        try:
+            result = service.generate_report(output_path)
+            assert result is True
+            assert Path(output_path).exists()
+            content = Path(output_path).read_text()
+            assert "test-pkg" in content
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
+    def test_service_generate_report_empty(self, temp_db):
+        """Service should return False for empty report."""
+        service = PackageStatsService(temp_db)
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False
+        ) as f:
+            output_path = f.name
+
+        try:
+            result = service.generate_report(output_path)
+            assert result is False
         finally:
             Path(output_path).unlink(missing_ok=True)

@@ -47,6 +47,12 @@ from .reports import (
     generate_package_html_report,
     make_svg_pie_chart,
 )
+from .service import (
+    FetchResult,
+    PackageDetails,
+    PackageInfo,
+    PackageStatsService,
+)
 from .utils import (
     calculate_growth,
     make_sparkline,
@@ -89,6 +95,11 @@ __all__ = [
     "generate_html_report",
     "generate_package_html_report",
     "make_svg_pie_chart",
+    # Service
+    "FetchResult",
+    "PackageDetails",
+    "PackageInfo",
+    "PackageStatsService",
     # Utils
     "calculate_growth",
     "make_sparkline",

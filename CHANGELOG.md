@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `--no-browser` flag for `report` and `update` commands (useful for automation/cron)
 - Progress indicator during fetch: `[1/27] Fetching stats for package...`
 - Database context manager `get_db()` for safer resource handling
-- 24 new tests (93 total)
+- Service layer `PackageStatsService` for decoupled, testable operations
+- Dataclasses: `PackageInfo`, `FetchResult`, `PackageDetails`
+- 35 new tests (104 total)
 
 ### Changed
 
@@ -21,10 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `export.py` - CSV/JSON/Markdown export
   - `api.py` - pypistats API wrapper functions
   - `db.py` - Database operations and context manager
+  - `service.py` - High-level service layer abstraction
   - `cli.py` - CLI argument parsing and commands
   - `reports.py` - HTML/SVG report generation
   - `__init__.py` - Public API re-exports
 - All CLI commands now use context manager for database connections
+- Refactored `reports.py` to extract shared components:
+  - `_render_html_document()` for HTML boilerplate
+  - `_make_single_line_chart()` for single-series line charts
+  - `_make_multi_line_chart()` for multi-package time-series charts
+  - `_build_env_charts()` for Python version and OS pie charts
+  - Eliminated ~110 lines of duplicated CSS and SVG chart code
 
 ## [0.1.2]
 
