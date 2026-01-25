@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
+from .types import PackageStats
 from .utils import calculate_growth
 
 
@@ -108,7 +109,7 @@ def get_packages(conn: sqlite3.Connection) -> list[str]:
 
 
 def store_stats(
-    conn: sqlite3.Connection, package_name: str, stats: dict[str, Any]
+    conn: sqlite3.Connection, package_name: str, stats: PackageStats
 ) -> None:
     """Store package statistics in the database."""
     fetch_date = datetime.now().strftime("%Y-%m-%d")
@@ -228,3 +229,37 @@ def get_stats_with_growth(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         )
 
     return stats
+
+
+def cleanup_orphaned_stats(conn: sqlite3.Connection) -> int:
+    """Remove stats for packages that are no longer being tracked.
+
+    Returns the number of orphaned records deleted.
+    """
+    cursor = conn.execute("""
+        DELETE FROM package_stats
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
+    conn.commit()
+    return cursor.rowcount
+
+
+def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
+    """Remove stats older than the specified number of days.
+
+    Args:
+        conn: Database connection.
+        days: Delete stats older than this many days (default: 365).
+
+    Returns:
+        Number of records deleted.
+    """
+    cursor = conn.execute(
+        """
+        DELETE FROM package_stats
+        WHERE fetch_date < date('now', ?)
+    """,
+        (f"-{days} days",),
+    )
+    conn.commit()
+    return cursor.rowcount

@@ -1,10 +1,34 @@
 """HTML report generation with SVG charts."""
 
+import logging
 import math
 from datetime import datetime
 from typing import Any
 
-from .api import fetch_python_versions, fetch_os_stats
+from .api import fetch_os_stats, fetch_python_versions
+from .types import CategoryDownloads, EnvSummary, PackageStats
+
+logger = logging.getLogger("pkgdb")
+
+# -----------------------------------------------------------------------------
+# Theme and Chart Constants
+# -----------------------------------------------------------------------------
+
+# Primary theme color (used for links, accents, chart elements)
+THEME_PRIMARY_COLOR = "#4a90a4"
+
+# Chart dimensions
+DEFAULT_BAR_CHART_WIDTH = 600
+DEFAULT_BAR_CHART_HEIGHT = 300
+DEFAULT_LINE_CHART_WIDTH = 600
+DEFAULT_LINE_CHART_HEIGHT = 200
+DEFAULT_PIE_CHART_SIZE = 220
+
+# Pie chart limits
+PIE_CHART_MAX_ITEMS = 6  # Maximum slices before grouping into "Other"
+
+# Line chart limits
+LINE_CHART_MAX_SERIES = 5  # Maximum number of packages to show in multi-line chart
 
 
 # -----------------------------------------------------------------------------
@@ -14,94 +38,94 @@ from .api import fetch_python_versions, fetch_os_stats
 
 def _get_common_styles() -> str:
     """Return CSS styles shared by all reports."""
-    return """
-        body {
+    return f"""
+        body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
             background: #f5f5f5;
-        }
-        h1, h2, h3 {
+        }}
+        h1, h2, h3 {{
             color: #333;
-        }
-        .chart-container {
+        }}
+        .chart-container {{
             background: white;
             border-radius: 8px;
             padding: 20px;
             margin: 20px 0;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             overflow-x: auto;
-        }
-        table {
+        }}
+        table {{
             width: 100%;
             border-collapse: collapse;
             background: white;
             border-radius: 8px;
             overflow: hidden;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        th, td {
+        }}
+        th, td {{
             padding: 12px;
             text-align: left;
             border-bottom: 1px solid #eee;
-        }
-        th {
-            background: #4a90a4;
+        }}
+        th {{
+            background: {THEME_PRIMARY_COLOR};
             color: white;
-        }
-        tr:hover {
+        }}
+        tr:hover {{
             background: #f9f9f9;
-        }
-        .number {
+        }}
+        .number {{
             text-align: right;
             font-family: monospace;
-        }
-        .generated {
+        }}
+        .generated {{
             color: #666;
             font-size: 0.9em;
             margin-top: 20px;
-        }
-        .pie-charts-row {
+        }}
+        .pie-charts-row {{
             display: flex;
             flex-wrap: wrap;
             gap: 40px;
             justify-content: flex-start;
-        }
-        .pie-chart-wrapper {
+        }}
+        .pie-chart-wrapper {{
             flex: 0 0 auto;
-        }
-        .pie-chart-wrapper h3 {
+        }}
+        .pie-chart-wrapper h3 {{
             margin: 0 0 10px 0;
             font-size: 14px;
             color: #555;
-        }
-        .stats-grid {
+        }}
+        .stats-grid {{
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 20px;
             margin: 20px 0;
-        }
-        .stat-card {
+        }}
+        .stat-card {{
             background: white;
             border-radius: 8px;
             padding: 20px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             text-align: center;
-        }
-        .stat-value {
+        }}
+        .stat-value {{
             font-size: 24px;
             font-weight: bold;
-            color: #4a90a4;
-        }
-        .stat-label {
+            color: {THEME_PRIMARY_COLOR};
+        }}
+        .stat-label {{
             font-size: 12px;
             color: #666;
             margin-top: 5px;
-        }
-        a {
-            color: #4a90a4;
-        }
+        }}
+        a {{
+            color: {THEME_PRIMARY_COLOR};
+        }}
     """
 
 
@@ -160,10 +184,10 @@ def make_svg_pie_chart(
     if total == 0:
         return "<p>No data available.</p>"
 
-    # Limit to top 6 items, group rest as "Other"
-    if len(data) > 6:
-        top_data = data[:5]
-        other_total = sum(v for _, v in data[5:])
+    # Limit to top items, group rest as "Other"
+    if len(data) > PIE_CHART_MAX_ITEMS:
+        top_data = data[: PIE_CHART_MAX_ITEMS - 1]
+        other_total = sum(v for _, v in data[PIE_CHART_MAX_ITEMS - 1 :])
         if other_total > 0:
             top_data.append(("Other", other_total))
         data = top_data
@@ -333,14 +357,14 @@ def _make_single_line_chart(
 def _make_multi_line_chart(
     history_data: dict[str, list[dict[str, Any]]] | None,
     chart_id: str,
-    max_lines: int = 5,
+    max_lines: int = LINE_CHART_MAX_SERIES,
 ) -> str:
     """Generate an SVG line chart showing multiple packages over time.
 
     Args:
         history_data: Dict mapping package names to their history records.
         chart_id: SVG element ID.
-        max_lines: Maximum number of packages to show.
+        max_lines: Maximum number of packages to show (default: LINE_CHART_MAX_SERIES).
 
     Returns:
         SVG string, or message if insufficient data.
@@ -470,8 +494,8 @@ def _make_multi_line_chart(
 
 
 def _build_env_charts(
-    py_versions: list[dict[str, Any]] | None,
-    os_stats: list[dict[str, Any]] | None,
+    py_versions: list[CategoryDownloads] | None,
+    os_stats: list[CategoryDownloads] | None,
     size: int = 220,
 ) -> tuple[str, str]:
     """Build pie charts for Python versions and OS distribution.
@@ -516,7 +540,7 @@ def generate_html_report(
     output_file: str,
     history: dict[str, list[dict[str, Any]]] | None = None,
     packages: list[str] | None = None,
-    env_summary: dict[str, list[tuple[str, int]]] | None = None,
+    env_summary: EnvSummary | None = None,
 ) -> None:
     """Generate a self-contained HTML report with inline SVG charts.
 
@@ -528,7 +552,7 @@ def generate_html_report(
         env_summary: Pre-fetched Python version and OS summary data
     """
     if not stats:
-        print("No statistics available to generate report.")
+        logger.warning("No statistics available to generate report.")
         return
 
     # Build charts
@@ -613,13 +637,13 @@ def generate_html_report(
 
     with open(output_file, "w") as f:
         f.write(html)
-    print(f"Report generated: {output_file}")
+    logger.info("Report generated: %s", output_file)
 
 
 def generate_package_html_report(
     package: str,
     output_file: str,
-    stats: dict[str, Any] | None = None,
+    stats: PackageStats | None = None,
     history: list[dict[str, Any]] | None = None,
 ) -> None:
     """Generate a detailed HTML report for a single package.
@@ -628,14 +652,14 @@ def generate_package_html_report(
     """
     from .api import fetch_package_stats
 
-    print(f"Fetching detailed stats for {package}...")
+    logger.info("Fetching detailed stats for %s...", package)
 
     # Fetch fresh stats from API if not provided
     if stats is None:
         stats = fetch_package_stats(package)
 
     if not stats:
-        print(f"Could not fetch stats for {package}")
+        logger.warning("Could not fetch stats for %s", package)
         return
 
     # Fetch environment data and build charts
@@ -689,4 +713,4 @@ def generate_package_html_report(
 
     with open(output_file, "w") as f:
         f.write(html)
-    print(f"Report generated: {output_file}")
+    logger.info("Report generated: %s", output_file)

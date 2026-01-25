@@ -631,14 +631,13 @@ class TestFetchPackageStats:
         assert stats["last_month"] == 3000
         assert stats["total"] == 50000
 
-    def test_fetch_package_stats_handles_error(self, capsys):
-        """fetch_package_stats should return None and print error on failure."""
-        with patch("pkgdb.api.pypistats.recent", side_effect=Exception("API error")):
+    def test_fetch_package_stats_handles_error(self, caplog):
+        """fetch_package_stats should return None and log error on failure."""
+        with patch("pkgdb.api.pypistats.recent", side_effect=ValueError("API error")):
             stats = fetch_package_stats("nonexistent-package")
 
         assert stats is None
-        captured = capsys.readouterr()
-        assert "Error fetching stats" in captured.out
+        assert "Error fetching stats" in caplog.text
 
     def test_fetch_python_versions_parses_response(self):
         """fetch_python_versions should parse pypistats response correctly."""
@@ -661,7 +660,7 @@ class TestFetchPackageStats:
 
     def test_fetch_python_versions_handles_error(self, capsys):
         """fetch_python_versions should return None on error."""
-        with patch("pkgdb.api.pypistats.python_minor", side_effect=Exception("API error")):
+        with patch("pkgdb.api.pypistats.python_minor", side_effect=ValueError("API error")):
             versions = fetch_python_versions("nonexistent-package")
 
         assert versions is None
@@ -687,7 +686,7 @@ class TestFetchPackageStats:
 
     def test_fetch_os_stats_handles_error(self, capsys):
         """fetch_os_stats should return None on error."""
-        with patch("pkgdb.api.pypistats.system", side_effect=Exception("API error")):
+        with patch("pkgdb.api.pypistats.system", side_effect=ValueError("API error")):
             os_stats = fetch_os_stats("nonexistent-package")
 
         assert os_stats is None
@@ -745,7 +744,7 @@ class TestHTMLReportGeneration:
         finally:
             Path(output_path).unlink(missing_ok=True)
 
-    def test_generate_html_report_empty_stats(self, capsys):
+    def test_generate_html_report_empty_stats(self, caplog):
         """generate_html_report should handle empty stats gracefully."""
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".html", delete=False
@@ -754,8 +753,7 @@ class TestHTMLReportGeneration:
 
         try:
             generate_html_report([], output_path)
-            captured = capsys.readouterr()
-            assert "No statistics available" in captured.out
+            assert "No statistics available" in caplog.text
         finally:
             Path(output_path).unlink(missing_ok=True)
 
@@ -804,21 +802,20 @@ class TestCLI:
         captured = capsys.readouterr()
         assert "usage:" in captured.out.lower() or "Available commands" in captured.out
 
-    def test_main_add_command(self, temp_db, capsys):
+    def test_main_add_command(self, temp_db, caplog):
         """add command should add a package to tracking."""
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "add", "requests"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "Added" in captured.out
-        assert "requests" in captured.out
+        assert "Added" in caplog.text
+        assert "requests" in caplog.text
 
         conn = get_db_connection(temp_db)
         packages = get_packages(conn)
         conn.close()
         assert "requests" in packages
 
-    def test_main_add_command_duplicate(self, temp_db, capsys):
+    def test_main_add_command_duplicate(self, temp_db, caplog):
         """add command should indicate when package already tracked."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -828,10 +825,9 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "add", "requests"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "already" in captured.out
+        assert "already" in caplog.text
 
-    def test_main_remove_command(self, temp_db, capsys):
+    def test_main_remove_command(self, temp_db, caplog):
         """remove command should remove a package from tracking."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -841,16 +837,15 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "remove", "requests"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "Removed" in captured.out
-        assert "requests" in captured.out
+        assert "Removed" in caplog.text
+        assert "requests" in caplog.text
 
         conn = get_db_connection(temp_db)
         packages = get_packages(conn)
         conn.close()
         assert "requests" not in packages
 
-    def test_main_remove_command_not_found(self, temp_db, capsys):
+    def test_main_remove_command_not_found(self, temp_db, caplog):
         """remove command should indicate when package not tracked."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -859,10 +854,9 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "remove", "nonexistent"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "was not" in captured.out
+        assert "was not" in caplog.text
 
-    def test_main_list_command_empty(self, temp_db, capsys):
+    def test_main_list_command_empty(self, temp_db, caplog):
         """list command should indicate when no packages tracked."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -871,10 +865,9 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "list"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "No packages" in captured.out
+        assert "No packages" in caplog.text
 
-    def test_main_list_command_with_packages(self, temp_db, capsys):
+    def test_main_list_command_with_packages(self, temp_db, capsys, caplog):
         """list command should display tracked packages."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -886,11 +879,13 @@ class TestCLI:
             main()
 
         captured = capsys.readouterr()
+        # Table data goes to stdout
         assert "requests" in captured.out
         assert "flask" in captured.out
-        assert "Tracking 2 packages" in captured.out
+        # Header message goes to logging
+        assert "Tracking 2 packages" in caplog.text
 
-    def test_main_import_command(self, temp_db, temp_packages_file, capsys):
+    def test_main_import_command(self, temp_db, temp_packages_file, caplog):
         """import command should import packages from YAML file."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -899,8 +894,7 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "import", temp_packages_file]):
             main()
 
-        captured = capsys.readouterr()
-        assert "Imported 2 packages" in captured.out
+        assert "Imported 2 packages" in caplog.text
 
         conn = get_db_connection(temp_db)
         packages = get_packages(conn)
@@ -908,7 +902,7 @@ class TestCLI:
         assert "package-a" in packages
         assert "package-b" in packages
 
-    def test_main_import_command_file_not_found(self, temp_db, capsys):
+    def test_main_import_command_file_not_found(self, temp_db, caplog):
         """import command should handle missing file."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -917,8 +911,7 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "import", "/nonexistent/file.yml"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "File not found" in captured.out
+        assert "File not found" in caplog.text
 
     def test_main_fetch_command(self, temp_db):
         """fetch command should fetch and store stats for tracked packages."""
@@ -947,7 +940,7 @@ class TestCLI:
         assert cursor.fetchone()["count"] == 2
         conn.close()
 
-    def test_main_fetch_command_no_packages(self, temp_db, capsys):
+    def test_main_fetch_command_no_packages(self, temp_db, caplog):
         """fetch command should prompt to add packages when none tracked."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -956,11 +949,10 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "fetch"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "No packages" in captured.out
-        assert "pkgdb add" in captured.out or "pkgdb import" in captured.out
+        assert "No packages" in caplog.text
+        assert "pkgdb add" in caplog.text or "pkgdb import" in caplog.text
 
-    def test_main_show_command_empty_db(self, temp_db, capsys):
+    def test_main_show_command_empty_db(self, temp_db, caplog):
         """show command should indicate when database is empty."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -969,8 +961,7 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "show"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "No data" in captured.out or "fetch" in captured.out.lower()
+        assert "No data" in caplog.text or "fetch" in caplog.text.lower()
 
     def test_main_show_command_with_data(self, temp_db, capsys):
         """show command should display stats from database."""
@@ -1040,7 +1031,7 @@ class TestCLI:
         assert "2024-01-01" in captured.out
         assert "2024-01-02" in captured.out
 
-    def test_main_history_command_unknown_package(self, temp_db, capsys):
+    def test_main_history_command_unknown_package(self, temp_db, caplog):
         """history command should indicate when no data found."""
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -1049,8 +1040,7 @@ class TestCLI:
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "nonexistent"]):
             main()
 
-        captured = capsys.readouterr()
-        assert "No data found" in captured.out
+        assert "No data found" in caplog.text
 
     def test_main_export_csv(self, temp_db, capsys):
         """export command should output CSV to stdout."""
@@ -1379,8 +1369,8 @@ class TestAggregateEnvStats:
 
     def test_aggregate_env_stats_handles_errors(self):
         """aggregate_env_stats should handle API errors gracefully."""
-        with patch("pkgdb.api.pypistats.python_minor", side_effect=Exception("API error")):
-            with patch("pkgdb.api.pypistats.system", side_effect=Exception("API error")):
+        with patch("pkgdb.api.pypistats.python_minor", side_effect=ValueError("API error")):
+            with patch("pkgdb.api.pypistats.system", side_effect=ValueError("API error")):
                 result = aggregate_env_stats(["pkg-a"])
 
         assert result["python_versions"] == []

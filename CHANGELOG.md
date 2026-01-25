@@ -15,18 +15,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Service layer `PackageStatsService` for decoupled, testable operations
 - Dataclasses: `PackageInfo`, `FetchResult`, `PackageDetails`
 - Package name validation: `validate_package_name()` enforces PyPI naming conventions
+- Logging module with `-v/--verbose` and `-q/--quiet` flags
+- TypedDict types for type safety: `PackageStats`, `CategoryDownloads`, `EnvSummary`, `HistoryRecord`, `StatsWithGrowth`
+- Parallel API fetching with `fetch_all_package_stats()` and improved `aggregate_env_stats()`
+- `cleanup` command with `--orphans` and `--prune` flags for database maintenance
+- Database functions: `cleanup_orphaned_stats()`, `prune_old_stats()`
+- Service methods: `cleanup()`, `prune()`
+- Named constants for theme colors (`THEME_PRIMARY_COLOR`), chart dimensions, limits (`PIE_CHART_MAX_ITEMS`, `LINE_CHART_MAX_SERIES`), and sparkline parameters (`SPARKLINE_WIDTH`, `SPARKLINE_CHARS`)
 - 43 new tests (112 total)
 
 ### Changed
 
+- Narrowed exception handling in API functions to specific exceptions (`JSONDecodeError`, `URLError`, `ValueError`, `KeyError`, `TypeError`, `OSError`) instead of bare `except` - improves debugging
+- Replaced print statements with Python logging throughout CLI/API/reports
 - Modular architecture: split monolithic `__init__.py` into focused modules:
   - `utils.py` - Helper functions (sparkline, growth calculation)
   - `export.py` - CSV/JSON/Markdown export
-  - `api.py` - pypistats API wrapper functions
+  - `api.py` - pypistats API wrapper functions (now with parallel fetching)
   - `db.py` - Database operations and context manager
   - `service.py` - High-level service layer abstraction
   - `cli.py` - CLI argument parsing and commands
   - `reports.py` - HTML/SVG report generation
+  - `logging.py` - Logging configuration with verbose/quiet modes
+  - `types.py` - TypedDict definitions for type safety
   - `__init__.py` - Public API re-exports
 - All CLI commands now use context manager for database connections
 - Refactored `reports.py` to extract shared components:

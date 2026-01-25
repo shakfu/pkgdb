@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any
 import webbrowser
@@ -10,8 +11,12 @@ import yaml
 from tabulate import tabulate
 
 from .db import DEFAULT_DB_FILE, DEFAULT_REPORT_FILE
+from .logging import setup_logging
 from .service import PackageStatsService
+from .types import PackageStats
 from .utils import make_sparkline
+
+logger = logging.getLogger("pkgdb")
 
 
 DEFAULT_PACKAGES_FILE = "packages.yml"
@@ -90,27 +95,30 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     packages = service.list_packages()
 
     if not packages:
-        print("No packages are being tracked.")
-        print(
+        logger.warning("No packages are being tracked.")
+        logger.info(
             "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
         )
         return
 
     total = len(packages)
-    print(f"Fetching stats for {total} tracked packages...")
+    logger.info("Fetching stats for %d tracked packages...", total)
 
     def on_progress(
-        current: int, total: int, package: str, stats: dict[str, Any] | None
+        current: int, total: int, package: str, stats: PackageStats | None
     ) -> None:
-        print(f"[{current}/{total}] Fetching stats for {package}...")
+        logger.info("[%d/%d] Fetching stats for %s...", current, total, package)
         if stats:
-            print(
-                f"  Total: {stats['total']:,} | Month: {stats['last_month']:,} | "
-                f"Week: {stats['last_week']:,} | Day: {stats['last_day']:,}"
+            logger.debug(
+                "  Total: %s | Month: %s | Week: %s | Day: %s",
+                f"{stats['total']:,}",
+                f"{stats['last_month']:,}",
+                f"{stats['last_week']:,}",
+                f"{stats['last_day']:,}",
             )
 
     result = service.fetch_all_stats(progress_callback=on_progress)
-    print(f"Done. ({result.success} succeeded, {result.failed} failed)")
+    logger.info("Done. (%d succeeded, %d failed)", result.success, result.failed)
 
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -124,14 +132,14 @@ def cmd_report(args: argparse.Namespace) -> None:
     else:
         include_env = getattr(args, "env", False)
         if include_env:
-            print("Fetching environment data (this may take a moment)...")
+            logger.info("Fetching environment data (this may take a moment)...")
 
         if not service.generate_report(args.output, include_env=include_env):
-            print("No data in database. Run 'fetch' first.")
+            logger.warning("No data in database. Run 'fetch' first.")
             return
 
     if not no_browser:
-        print("Opening report in browser...")
+        logger.info("Opening report in browser...")
         webbrowser.open_new_tab(Path(args.output).resolve().as_uri())
 
 
@@ -149,7 +157,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     stats = service.get_stats(with_growth=True)
 
     if not stats:
-        print("No data in database. Run 'fetch' first.")
+        logger.warning("No data in database. Run 'fetch' first.")
         return
 
     history = service.get_all_history(limit_per_package=14)
@@ -190,13 +198,13 @@ def cmd_list(args: argparse.Namespace) -> None:
     packages = service.list_packages()
 
     if not packages:
-        print("No packages are being tracked.")
-        print(
+        logger.warning("No packages are being tracked.")
+        logger.info(
             "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
         )
         return
 
-    print(f"Tracking {len(packages)} packages:\n")
+    logger.info("Tracking %d packages:\n", len(packages))
 
     rows = [[pkg.name, pkg.added_date] for pkg in packages]
     headers = ["Package", "Added"]
@@ -208,20 +216,20 @@ def cmd_add(args: argparse.Namespace) -> None:
     service = PackageStatsService(args.database)
     try:
         if service.add_package(args.name):
-            print(f"Added '{args.name}' to tracking.")
+            logger.info("Added '%s' to tracking.", args.name)
         else:
-            print(f"Package '{args.name}' is already being tracked.")
+            logger.warning("Package '%s' is already being tracked.", args.name)
     except ValueError as e:
-        print(f"Invalid package name '{args.name}': {e}")
+        logger.error("Invalid package name '%s': %s", args.name, e)
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
     """Remove command: remove a package from tracking."""
     service = PackageStatsService(args.database)
     if service.remove_package(args.name):
-        print(f"Removed '{args.name}' from tracking.")
+        logger.info("Removed '%s' from tracking.", args.name)
     else:
-        print(f"Package '{args.name}' was not being tracked.")
+        logger.warning("Package '%s' was not being tracked.", args.name)
 
 
 def cmd_import(args: argparse.Namespace) -> None:
@@ -229,11 +237,13 @@ def cmd_import(args: argparse.Namespace) -> None:
     service = PackageStatsService(args.database)
     try:
         added, skipped, invalid = service.import_packages(args.file)
-        print(f"Imported {added} packages ({skipped} already tracked).")
+        logger.info("Imported %d packages (%d already tracked).", added, skipped)
         if invalid:
-            print(f"Skipped {len(invalid)} invalid package names: {', '.join(invalid)}")
+            logger.warning(
+                "Skipped %d invalid package names: %s", len(invalid), ", ".join(invalid)
+            )
     except FileNotFoundError:
-        print(f"File not found: {args.file}")
+        logger.error("File not found: %s", args.file)
 
 
 def cmd_history(args: argparse.Namespace) -> None:
@@ -242,7 +252,7 @@ def cmd_history(args: argparse.Namespace) -> None:
     history = service.get_history(args.package, limit=args.limit)
 
     if not history:
-        print(f"No data found for package '{args.package}'.")
+        logger.warning("No data found for package '%s'.", args.package)
         return
 
     print(f"Historical stats for {args.package}\n")
@@ -270,17 +280,17 @@ def cmd_export(args: argparse.Namespace) -> None:
     try:
         output = service.export(args.format)
     except ValueError as e:
-        print(str(e))
+        logger.error("%s", e)
         return
 
     if output is None:
-        print("No data in database. Run 'fetch' first.")
+        logger.warning("No data in database. Run 'fetch' first.")
         return
 
     if args.output:
         with open(args.output, "w") as f:
             f.write(output)
-        print(f"Exported to {args.output}")
+        logger.info("Exported to %s", args.output)
     else:
         print(output)
 
@@ -288,9 +298,9 @@ def cmd_export(args: argparse.Namespace) -> None:
 def cmd_stats(args: argparse.Namespace) -> None:
     """Stats command: show detailed statistics for a package."""
     service = PackageStatsService(args.database)
+    logger.info("Fetching detailed stats for %s...", args.package)
     details = service.fetch_package_details(args.package)
-
-    print(f"Fetching detailed stats for {args.package}...\n")
+    print()  # Blank line after log message
 
     if details.stats:
         print("=== Download Summary ===")
@@ -325,6 +335,28 @@ def cmd_stats(args: argparse.Namespace) -> None:
         print()
 
 
+def cmd_cleanup(args: argparse.Namespace) -> None:
+    """Cleanup command: remove orphaned stats and optionally prune old data."""
+    service = PackageStatsService(args.database)
+
+    # Remove orphaned stats (stats for packages no longer tracked)
+    orphaned, remaining = service.cleanup()
+    if orphaned > 0:
+        logger.info("Removed %d orphaned stats records.", orphaned)
+    else:
+        logger.info("No orphaned stats to remove.")
+
+    # Optionally prune old stats
+    if hasattr(args, "days") and args.days:
+        pruned = service.prune(args.days)
+        if pruned > 0:
+            logger.info("Pruned %d stats older than %d days.", pruned, args.days)
+        else:
+            logger.info("No stats older than %d days to prune.", args.days)
+
+    logger.info("Database has %d tracked packages.", remaining)
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
@@ -336,6 +368,18 @@ def create_parser() -> argparse.ArgumentParser:
         "--database",
         default=DEFAULT_DB_FILE,
         help=f"SQLite database file (default: {DEFAULT_DB_FILE})",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose output (show debug messages)",
+    )
+    parser.add_argument(
+        "-q",
+        "--quiet",
+        action="store_true",
+        help="Suppress informational output (only show warnings/errors)",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -491,6 +535,19 @@ def create_parser() -> argparse.ArgumentParser:
     )
     update_parser.set_defaults(func=cmd_update)
 
+    # cleanup command
+    cleanup_parser = subparsers.add_parser(
+        "cleanup",
+        help="Remove orphaned stats and optionally prune old data",
+    )
+    cleanup_parser.add_argument(
+        "--days",
+        type=int,
+        metavar="N",
+        help="Also prune stats older than N days",
+    )
+    cleanup_parser.set_defaults(func=cmd_cleanup)
+
     return parser
 
 
@@ -498,6 +555,12 @@ def main() -> None:
     """Main entry point for the CLI."""
     parser = create_parser()
     args = parser.parse_args()
+
+    # Set up logging based on flags
+    setup_logging(
+        verbose=getattr(args, "verbose", False),
+        quiet=getattr(args, "quiet", False),
+    )
 
     if args.command is None:
         parser.print_help()

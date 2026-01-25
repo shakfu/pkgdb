@@ -2,12 +2,26 @@
 
 import re
 
+# -----------------------------------------------------------------------------
+# Package Validation Constants
+# -----------------------------------------------------------------------------
+
 # PyPI package name pattern (PEP 508 compatible)
 # - Must start and end with alphanumeric
 # - Can contain alphanumeric, hyphens, underscores, and periods
 # - Max 100 characters
 _PACKAGE_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$")
 _MAX_PACKAGE_NAME_LENGTH = 100
+
+# -----------------------------------------------------------------------------
+# Sparkline Constants
+# -----------------------------------------------------------------------------
+
+# Default width for sparkline charts (number of characters)
+SPARKLINE_WIDTH = 7
+
+# Characters used to represent values in sparklines (low to high)
+SPARKLINE_CHARS = " _.,:-=+*#"
 
 
 def validate_package_name(name: str) -> tuple[bool, str]:
@@ -43,8 +57,16 @@ def calculate_growth(current: int | None, previous: int | None) -> float | None:
     return ((current - previous) / previous) * 100
 
 
-def make_sparkline(values: list[int], width: int = 7) -> str:
-    """Generate an ASCII sparkline from a list of values."""
+def make_sparkline(values: list[int], width: int = SPARKLINE_WIDTH) -> str:
+    """Generate an ASCII sparkline from a list of values.
+
+    Args:
+        values: List of integer values to visualize.
+        width: Number of characters in the sparkline (default: SPARKLINE_WIDTH).
+
+    Returns:
+        ASCII string representing the trend of values.
+    """
     if not values:
         return " " * width
 
@@ -55,16 +77,17 @@ def make_sparkline(values: list[int], width: int = 7) -> str:
     if len(values) < width:
         values = [0] * (width - len(values)) + values
 
-    blocks = " _.,:-=+*#"
     min_val = min(values)
     max_val = max(values)
 
     if max_val == min_val:
-        return blocks[4] * width
+        # All values equal - use middle character
+        mid_idx = len(SPARKLINE_CHARS) // 2
+        return SPARKLINE_CHARS[mid_idx] * width
 
     sparkline = ""
     for v in values:
-        idx = int((v - min_val) / (max_val - min_val) * (len(blocks) - 1))
-        sparkline += blocks[idx]
+        idx = int((v - min_val) / (max_val - min_val) * (len(SPARKLINE_CHARS) - 1))
+        sparkline += SPARKLINE_CHARS[idx]
 
     return sparkline

@@ -11,18 +11,21 @@ from .api import (
 )
 from .db import (
     add_package,
+    cleanup_orphaned_stats,
     get_all_history,
     get_db,
     get_latest_stats,
     get_package_history,
     get_packages,
     get_stats_with_growth,
+    prune_old_stats,
     remove_package,
     store_stats,
 )
-from .utils import validate_package_name
 from .export import export_csv, export_json, export_markdown
 from .reports import generate_html_report, generate_package_html_report
+from .types import CategoryDownloads, PackageStats
+from .utils import validate_package_name
 
 
 @dataclass
@@ -39,7 +42,7 @@ class FetchResult:
 
     success: int
     failed: int
-    results: dict[str, dict[str, Any] | None]
+    results: dict[str, PackageStats | None]
 
 
 @dataclass
@@ -47,9 +50,9 @@ class PackageDetails:
     """Detailed statistics for a package."""
 
     name: str
-    stats: dict[str, Any] | None
-    python_versions: list[dict[str, Any]] | None
-    os_stats: list[dict[str, Any]] | None
+    stats: PackageStats | None
+    python_versions: list[CategoryDownloads] | None
+    os_stats: list[CategoryDownloads] | None
 
 
 class PackageStatsService:
@@ -158,7 +161,7 @@ class PackageStatsService:
 
     def fetch_all_stats(
         self,
-        progress_callback: Callable[[int, int, str, dict[str, Any] | None], None]
+        progress_callback: Callable[[int, int, str, PackageStats | None], None]
         | None = None,
     ) -> FetchResult:
         """Fetch and store stats for all tracked packages.
@@ -175,7 +178,7 @@ class PackageStatsService:
             if not packages:
                 return FetchResult(success=0, failed=0, results={})
 
-            results: dict[str, dict[str, Any] | None] = {}
+            results: dict[str, PackageStats | None] = {}
             success = 0
             failed = 0
 
@@ -302,14 +305,14 @@ class PackageStatsService:
             history = get_package_history(conn, package, limit=30)
 
         # Find stats in history or fetch fresh
-        pkg_stats: dict[str, Any] | None = None
+        pkg_stats: PackageStats | None = None
         for h in history:
             if h["package_name"] == package:
                 pkg_stats = {
-                    "total": h["total"],
-                    "last_month": h["last_month"],
-                    "last_week": h["last_week"],
-                    "last_day": h["last_day"],
+                    "total": h["total"] or 0,
+                    "last_month": h["last_month"] or 0,
+                    "last_week": h["last_week"] or 0,
+                    "last_day": h["last_day"] or 0,
                 }
                 break
 
@@ -343,3 +346,32 @@ class PackageStatsService:
             return export_markdown(stats)
         else:
             raise ValueError(f"Unknown format: {format}")
+
+    # -------------------------------------------------------------------------
+    # Maintenance
+    # -------------------------------------------------------------------------
+
+    def cleanup(self) -> tuple[int, int]:
+        """Clean up orphaned stats and return counts.
+
+        Removes stats for packages that are no longer being tracked.
+
+        Returns:
+            Tuple of (orphaned_deleted, packages_remaining).
+        """
+        with get_db(self.db_path) as conn:
+            orphaned = cleanup_orphaned_stats(conn)
+            packages = get_packages(conn)
+            return orphaned, len(packages)
+
+    def prune(self, days: int = 365) -> int:
+        """Remove stats older than the specified number of days.
+
+        Args:
+            days: Delete stats older than this many days.
+
+        Returns:
+            Number of records deleted.
+        """
+        with get_db(self.db_path) as conn:
+            return prune_old_stats(conn, days)
