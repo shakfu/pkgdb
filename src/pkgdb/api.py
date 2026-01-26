@@ -192,11 +192,15 @@ def fetch_user_packages(username: str) -> list[str] | None:
     try:
         client = xmlrpc.client.ServerProxy(PYPI_XMLRPC_URL)
         # user_packages returns list of [role, package_name] pairs
-        packages = client.user_packages(username)
-        if not packages:
+        result = client.user_packages(username)
+        if not result or not isinstance(result, list):
             return []
         # Extract just the package names (second element of each pair)
-        return sorted(set(pkg[1] for pkg in packages))
+        package_names: set[str] = set()
+        for item in result:
+            if isinstance(item, (list, tuple)) and len(item) >= 2:
+                package_names.add(str(item[1]))
+        return sorted(package_names)
     except xmlrpc.client.Fault as e:
         logger.warning("PyPI API error for user '%s': %s", username, e.faultString)
         return None

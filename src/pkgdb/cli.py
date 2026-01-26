@@ -287,7 +287,9 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     packages = fetch_user_packages(username)
     if packages is None:
-        logger.error("Could not fetch packages for user '%s'. User may not exist.", username)
+        logger.error(
+            "Could not fetch packages for user '%s'. User may not exist.", username
+        )
         return
 
     if not packages:
