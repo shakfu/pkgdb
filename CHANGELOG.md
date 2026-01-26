@@ -7,8 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3]
+
 ### Added
 
+- `version` subcommand: `pkgdb version` displays the package version
+- `init` command: `pkgdb init --user <username>` auto-populates packages from a PyPI user account
+- `show` command enhancements:
+  - `--limit N` to show only top N packages
+  - `--sort-by` option to sort by total, month, week, day, growth, or name
+  - `--json` flag for machine-readable JSON output
+- `history` command: `--since DATE` flag to filter history by date (YYYY-MM-DD)
 - `--no-browser` flag for `report` and `update` commands (useful for automation/cron)
 - Progress indicator during fetch: `[1/27] Fetching stats for package...`
 - Database context manager `get_db()` for safer resource handling
@@ -28,11 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Error path tests (invalid files, partial API failures, database edge cases)
 - Output path validation: `validate_output_path()` checks for path traversal, sensitive directories, file extensions, and write permissions
 - Batch stats storage: `store_stats_batch()` for efficient multi-package inserts with single commit
-- 92 new tests (161 total, 8 skipped by default)
+- 98 new tests (167 total, 8 skipped by default)
 
 ### Changed
 
 - **BREAKING**: Default config file changed from `packages.yml` to `~/.pkgdb/packages.json`
+- **BREAKING**: Renamed `list` command to `packages` for clarity (`pkgdb packages`)
 - Removed `pyyaml` dependency - now uses stdlib `json` only
 - All data files now consistently use `~/.pkgdb/` directory (packages.json, pkg.db, report.html)
 - Service `fetch_all_stats()` now uses batch commits for better performance

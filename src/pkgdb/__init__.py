@@ -5,7 +5,7 @@ Reads published packages from packages.yml, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 # Re-export public API from submodules
 from .api import (
@@ -14,6 +14,7 @@ from .api import (
     fetch_os_stats,
     fetch_package_stats,
     fetch_python_versions,
+    fetch_user_packages,
 )
 from .cli import (
     DEFAULT_PACKAGES_FILE,
@@ -84,6 +85,7 @@ __all__ = [
     "fetch_os_stats",
     "fetch_package_stats",
     "fetch_python_versions",
+    "fetch_user_packages",
     # CLI
     "DEFAULT_PACKAGES_FILE",
     "import_packages_from_file",

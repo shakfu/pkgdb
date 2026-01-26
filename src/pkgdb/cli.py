@@ -14,6 +14,8 @@ from .logging import setup_logging
 from .service import PackageStatsService
 from .types import PackageStats
 from .utils import make_sparkline
+from .api import fetch_user_packages
+from . import __version__
 
 logger = logging.getLogger("pkgdb")
 
@@ -155,6 +157,43 @@ def cmd_show(args: argparse.Namespace) -> None:
         logger.warning("No data in database. Run 'fetch' first.")
         return
 
+    # Sort by specified field
+    sort_by = getattr(args, "sort_by", "total")
+    sort_keys = {
+        "total": lambda s: s.get("total") or 0,
+        "month": lambda s: s.get("last_month") or 0,
+        "week": lambda s: s.get("last_week") or 0,
+        "day": lambda s: s.get("last_day") or 0,
+        "growth": lambda s: s.get("month_growth") or 0,
+        "name": lambda s: s.get("package_name", ""),
+    }
+    reverse = sort_by != "name"  # Ascending for name, descending for numbers
+    stats = sorted(
+        stats, key=sort_keys.get(sort_by, sort_keys["total"]), reverse=reverse
+    )
+
+    # Apply limit
+    limit = getattr(args, "limit", None)
+    if limit:
+        stats = stats[:limit]
+
+    # JSON output
+    if getattr(args, "json", False):
+        output = []
+        for s in stats:
+            output.append(
+                {
+                    "package": s["package_name"],
+                    "total": s.get("total") or 0,
+                    "last_month": s.get("last_month") or 0,
+                    "last_week": s.get("last_week") or 0,
+                    "last_day": s.get("last_day") or 0,
+                    "month_growth": s.get("month_growth"),
+                }
+            )
+        print(json.dumps(output, indent=2))
+        return
+
     history = service.get_all_history(limit_per_package=14)
 
     rows = []
@@ -187,15 +226,15 @@ def cmd_show(args: argparse.Namespace) -> None:
     print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
-def cmd_list(args: argparse.Namespace) -> None:
-    """List command: show tracked packages."""
+def cmd_packages(args: argparse.Namespace) -> None:
+    """Packages command: show tracked packages."""
     service = PackageStatsService(args.database)
     packages = service.list_packages()
 
     if not packages:
         logger.warning("No packages are being tracked.")
         logger.info(
-            "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
+            "Add packages with 'pkgdb add <name>' or import with 'pkgdb import'."
         )
         return
 
@@ -241,6 +280,34 @@ def cmd_import(args: argparse.Namespace) -> None:
         logger.error("File not found: %s", args.file)
 
 
+def cmd_init(args: argparse.Namespace) -> None:
+    """Init command: auto-populate packages from PyPI user account."""
+    username = args.user
+    logger.info("Fetching packages for PyPI user '%s'...", username)
+
+    packages = fetch_user_packages(username)
+    if packages is None:
+        logger.error("Could not fetch packages for user '%s'. User may not exist.", username)
+        return
+
+    if not packages:
+        logger.warning("No packages found for user '%s'.", username)
+        return
+
+    logger.info("Found %d packages: %s", len(packages), ", ".join(packages))
+
+    service = PackageStatsService(args.database)
+    added = 0
+    skipped = 0
+    for pkg in packages:
+        if service.add_package(pkg):
+            added += 1
+        else:
+            skipped += 1
+
+    logger.info("Added %d packages (%d already tracked).", added, skipped)
+
+
 def cmd_history(args: argparse.Namespace) -> None:
     """History command: show historical stats for a package."""
     service = PackageStatsService(args.database)
@@ -249,6 +316,16 @@ def cmd_history(args: argparse.Namespace) -> None:
     if not history:
         logger.warning("No data found for package '%s'.", args.package)
         return
+
+    # Filter by --since date if provided
+    since = getattr(args, "since", None)
+    if since:
+        history = [h for h in history if h["fetch_date"] >= since]
+        if not history:
+            logger.warning(
+                "No data found for package '%s' since %s.", args.package, since
+            )
+            return
 
     print(f"Historical stats for {args.package}\n")
 
@@ -352,6 +429,11 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     logger.info("Database has %d tracked packages.", remaining)
 
 
+def cmd_version(args: argparse.Namespace) -> None:
+    """Version command: show pkgdb version."""
+    print(f"pkgdb {__version__}")
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create and configure the argument parser."""
     parser = argparse.ArgumentParser(
@@ -401,17 +483,17 @@ def create_parser() -> argparse.ArgumentParser:
     )
     remove_parser.set_defaults(func=cmd_remove)
 
-    # list command
-    list_parser = subparsers.add_parser(
-        "list",
-        help="List tracked packages",
+    # packages command
+    packages_parser = subparsers.add_parser(
+        "packages",
+        help="Show tracked packages",
     )
-    list_parser.set_defaults(func=cmd_list)
+    packages_parser.set_defaults(func=cmd_packages)
 
     # import command
     import_parser = subparsers.add_parser(
         "import",
-        help="Import packages from file (YAML, JSON, or text)",
+        help="Import packages from file (JSON or text)",
     )
     import_parser.add_argument(
         "file",
@@ -420,6 +502,20 @@ def create_parser() -> argparse.ArgumentParser:
         help=f"File to import from - supports .yml, .json, or plain text (default: {DEFAULT_PACKAGES_FILE})",
     )
     import_parser.set_defaults(func=cmd_import)
+
+    # init command
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Auto-populate packages from a PyPI user account",
+    )
+    init_parser.add_argument(
+        "--user",
+        "-u",
+        required=True,
+        metavar="USERNAME",
+        help="PyPI username to fetch packages from",
+    )
+    init_parser.set_defaults(func=cmd_init)
 
     # fetch command
     fetch_parser = subparsers.add_parser(
@@ -432,6 +528,25 @@ def create_parser() -> argparse.ArgumentParser:
     show_parser = subparsers.add_parser(
         "show",
         help="Display download stats in terminal",
+    )
+    show_parser.add_argument(
+        "-n",
+        "--limit",
+        type=int,
+        metavar="N",
+        help="Show only top N packages",
+    )
+    show_parser.add_argument(
+        "-s",
+        "--sort-by",
+        choices=["total", "month", "week", "day", "growth", "name"],
+        default="total",
+        help="Sort by field (default: total)",
+    )
+    show_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output in JSON format",
     )
     show_parser.set_defaults(func=cmd_show)
 
@@ -479,6 +594,11 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=30,
         help="Number of days to show (default: 30)",
+    )
+    history_parser.add_argument(
+        "--since",
+        metavar="DATE",
+        help="Show history since DATE (YYYY-MM-DD)",
     )
     history_parser.set_defaults(func=cmd_history)
 
@@ -542,6 +662,13 @@ def create_parser() -> argparse.ArgumentParser:
         help="Also prune stats older than N days",
     )
     cleanup_parser.set_defaults(func=cmd_cleanup)
+
+    # version command
+    version_parser = subparsers.add_parser(
+        "version",
+        help="Show pkgdb version",
+    )
+    version_parser.set_defaults(func=cmd_version)
 
     return parser
 

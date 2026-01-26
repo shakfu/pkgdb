@@ -47,6 +47,7 @@ from pkgdb import (
     PackageDetails,
     validate_package_name,
     validate_output_path,
+    fetch_user_packages,
 )
 
 
@@ -858,26 +859,26 @@ class TestCLI:
 
         assert "was not" in caplog.text
 
-    def test_main_list_command_empty(self, temp_db, caplog):
-        """list command should indicate when no packages tracked."""
+    def test_main_packages_command_empty(self, temp_db, caplog):
+        """packages command should indicate when no packages tracked."""
         conn = get_db_connection(temp_db)
         init_db(conn)
         conn.close()
 
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "list"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "packages"]):
             main()
 
         assert "No packages" in caplog.text
 
-    def test_main_list_command_with_packages(self, temp_db, capsys, caplog):
-        """list command should display tracked packages."""
+    def test_main_packages_command_with_packages(self, temp_db, capsys, caplog):
+        """packages command should display tracked packages."""
         conn = get_db_connection(temp_db)
         init_db(conn)
         add_package(conn, "requests")
         add_package(conn, "flask")
         conn.close()
 
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "list"]):
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "packages"]):
             main()
 
         captured = capsys.readouterr()
@@ -1280,6 +1281,225 @@ class TestCLI:
             assert "Opening" not in captured.out
         finally:
             Path(output_path).unlink(missing_ok=True)
+
+    def test_main_version_command(self, capsys):
+        """version command should display package version."""
+        from pkgdb import __version__
+
+        with patch("sys.argv", ["pkgdb", "version"]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "pkgdb" in captured.out
+        assert __version__ in captured.out
+
+    def test_main_show_command_with_limit(self, temp_db, capsys):
+        """show command with --limit should limit output."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        # Add 5 packages
+        for i in range(5):
+            conn.execute(f"""
+                INSERT INTO package_stats
+                (package_name, fetch_date, last_day, last_week, last_month, total)
+                VALUES ('pkg-{i}', '2024-01-01', {i*10}, {i*70}, {i*300}, {i*1000 + 1000})
+            """)
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--limit", "3"]):
+            main()
+
+        captured = capsys.readouterr()
+        # Should show only top 3 (highest totals)
+        assert "pkg-4" in captured.out  # 5000 total
+        assert "pkg-3" in captured.out  # 4000 total
+        assert "pkg-2" in captured.out  # 3000 total
+        assert "pkg-0" not in captured.out  # 1000 total - should be excluded
+
+    def test_main_show_command_with_sort_by(self, temp_db, capsys):
+        """show command with --sort-by should sort by specified field."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        # Add packages with different stats profiles
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES
+            ('high-total', '2024-01-01', 10, 70, 300, 10000),
+            ('high-month', '2024-01-01', 10, 70, 9000, 5000),
+            ('high-day', '2024-01-01', 500, 70, 300, 3000)
+        """)
+        conn.commit()
+        conn.close()
+
+        # Sort by month
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--sort-by", "month"]):
+            main()
+
+        captured = capsys.readouterr()
+        lines = [l for l in captured.out.split("\n") if l.strip()]
+        # First data line (after headers) should be high-month
+        data_lines = [l for l in lines if "high-" in l]
+        assert "high-month" in data_lines[0]
+
+    def test_main_show_command_with_json(self, temp_db, capsys):
+        """show command with --json should output JSON."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--json"]):
+            main()
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["package"] == "test-pkg"
+        assert data[0]["total"] == 1000
+        assert data[0]["last_month"] == 300
+        assert data[0]["last_week"] == 70
+        assert data[0]["last_day"] == 10
+
+    def test_main_history_command_with_since(self, temp_db, capsys):
+        """history command with --since should filter by date."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES
+            ('test-pkg', '2024-01-01', 10, 70, 300, 1000),
+            ('test-pkg', '2024-01-05', 20, 140, 600, 2000),
+            ('test-pkg', '2024-01-10', 30, 210, 900, 3000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "test-pkg", "--since", "2024-01-05"]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "test-pkg" in captured.out
+        assert "2024-01-01" not in captured.out  # Should be filtered out
+        assert "2024-01-05" in captured.out
+        assert "2024-01-10" in captured.out
+
+    def test_main_history_command_since_no_data(self, temp_db, caplog):
+        """history command with --since should handle no data in range."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "test-pkg", "--since", "2024-06-01"]):
+            main()
+
+        assert "No data found" in caplog.text
+        assert "since 2024-06-01" in caplog.text
+
+    def test_main_init_command(self, temp_db, caplog):
+        """init command should add packages from PyPI user."""
+        # Mock the XML-RPC response
+        mock_packages = [["Owner", "package-a"], ["Owner", "package-b"]]
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "init", "--user", "testuser"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = mock_packages
+                main()
+
+        assert "Found 2 packages" in caplog.text
+        assert "Added 2 packages" in caplog.text
+
+        # Verify packages were added to database
+        conn = get_db_connection(temp_db)
+        packages = get_packages(conn)
+        conn.close()
+        assert "package-a" in packages
+        assert "package-b" in packages
+
+    def test_main_init_command_user_not_found(self, temp_db, caplog):
+        """init command should handle API error (e.g., non-existent user)."""
+        import xmlrpc.client
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "init", "--user", "nonexistent"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.side_effect = xmlrpc.client.Fault(1, "User not found")
+                main()
+
+        assert "Could not fetch" in caplog.text
+
+    def test_main_init_command_user_no_packages(self, temp_db, caplog):
+        """init command should handle user with no packages."""
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "init", "--user", "emptyuser"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = []
+                main()
+
+        assert "No packages found" in caplog.text
+
+
+class TestFetchUserPackages:
+    """Tests for fetch_user_packages function."""
+
+    def test_fetch_user_packages_success(self):
+        """fetch_user_packages should return list of package names."""
+        mock_packages = [["Owner", "pkg-c"], ["Owner", "pkg-a"], ["Owner", "pkg-b"]]
+
+        with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+            mock_proxy.return_value.user_packages.return_value = mock_packages
+            result = fetch_user_packages("testuser")
+
+        assert result == ["pkg-a", "pkg-b", "pkg-c"]  # Should be sorted
+
+    def test_fetch_user_packages_deduplicates(self):
+        """fetch_user_packages should deduplicate packages."""
+        # User might have multiple roles for same package
+        mock_packages = [["Owner", "pkg-a"], ["Maintainer", "pkg-a"], ["Owner", "pkg-b"]]
+
+        with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+            mock_proxy.return_value.user_packages.return_value = mock_packages
+            result = fetch_user_packages("testuser")
+
+        assert result == ["pkg-a", "pkg-b"]
+
+    def test_fetch_user_packages_empty(self):
+        """fetch_user_packages should return empty list for user with no packages."""
+        with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+            mock_proxy.return_value.user_packages.return_value = []
+            result = fetch_user_packages("testuser")
+
+        assert result == []
+
+    def test_fetch_user_packages_api_error(self):
+        """fetch_user_packages should return None on API error."""
+        import xmlrpc.client
+
+        with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+            mock_proxy.return_value.user_packages.side_effect = xmlrpc.client.Fault(1, "Error")
+            result = fetch_user_packages("testuser")
+
+        assert result is None
+
+    def test_fetch_user_packages_network_error(self):
+        """fetch_user_packages should return None on network error."""
+        with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+            mock_proxy.return_value.user_packages.side_effect = OSError("Connection refused")
+            result = fetch_user_packages("testuser")
+
+        assert result is None
 
 
 class TestPieChart:

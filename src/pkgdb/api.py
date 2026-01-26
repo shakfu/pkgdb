@@ -2,6 +2,7 @@
 
 import json
 import logging
+import xmlrpc.client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from json import JSONDecodeError
 from urllib.error import URLError
@@ -170,3 +171,35 @@ def fetch_all_package_stats(
             results[pkg] = future.result()
 
     return results
+
+
+# PyPI XML-RPC API endpoint
+PYPI_XMLRPC_URL = "https://pypi.org/pypi"
+
+
+def fetch_user_packages(username: str) -> list[str] | None:
+    """Fetch list of packages owned by a PyPI user.
+
+    Uses PyPI's XML-RPC API to get the user's packages.
+
+    Args:
+        username: PyPI username.
+
+    Returns:
+        List of package names owned by the user (may be empty),
+        or None if API error occurs.
+    """
+    try:
+        client = xmlrpc.client.ServerProxy(PYPI_XMLRPC_URL)
+        # user_packages returns list of [role, package_name] pairs
+        packages = client.user_packages(username)
+        if not packages:
+            return []
+        # Extract just the package names (second element of each pair)
+        return sorted(set(pkg[1] for pkg in packages))
+    except xmlrpc.client.Fault as e:
+        logger.warning("PyPI API error for user '%s': %s", username, e.faultString)
+        return None
+    except (OSError, ConnectionError, TimeoutError) as e:
+        logger.warning("Network error fetching packages for user '%s': %s", username, e)
+        return None

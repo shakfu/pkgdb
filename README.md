@@ -45,8 +45,8 @@ pkgdb add <package-name>
 # Remove a package from tracking
 pkgdb remove <package-name>
 
-# List tracked packages
-pkgdb list
+# Show tracked packages
+pkgdb packages
 
 # Import packages from a file (JSON or plain text)
 pkgdb import packages.json
@@ -85,6 +85,12 @@ pkgdb cleanup
 
 # Prune stats older than N days
 pkgdb cleanup --days 365
+
+# Auto-populate packages from PyPI user account
+pkgdb init --user <pypi-username>
+
+# Show version
+pkgdb version
 ```
 
 ### Options
@@ -108,6 +114,18 @@ pkgdb report --no-browser
 # Limit history output to N days
 pkgdb history my-package -n 14
 
+# Show history since a specific date
+pkgdb history my-package --since 2024-01-01
+
+# Limit show output to top N packages
+pkgdb show --limit 10
+
+# Sort show output by field (total, month, week, day, growth, name)
+pkgdb show --sort-by month
+
+# Output show in JSON format
+pkgdb show --json
+
 # Export to file instead of stdout
 pkgdb export -f json -o stats.json
 ```
@@ -119,8 +137,9 @@ Modular CLI application with the following commands:
 **Package management:**
 - **add**: Add a package to tracking
 - **remove**: Remove a package from tracking
-- **list**: Show tracked packages with their added dates
+- **packages**: Show tracked packages with their added dates
 - **import**: Import packages from file (JSON or text)
+- **init**: Auto-populate packages from a PyPI user account
 
 **Data operations:**
 - **fetch**: Fetch download stats from PyPI and store in SQLite
@@ -135,6 +154,7 @@ Modular CLI application with the following commands:
 
 **Maintenance:**
 - **cleanup**: Remove orphaned stats and optionally prune old data
+- **version**: Show pkgdb version
 
 ### Data flow
 
