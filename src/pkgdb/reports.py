@@ -557,7 +557,11 @@ def generate_html_report(
 
     # Build charts
     totals_data = [(s["package_name"], s["total"] or 0) for s in stats]
-    month_data = [(s["package_name"], s["last_month"] or 0) for s in stats]
+    month_data = sorted(
+        [(s["package_name"], s["last_month"] or 0) for s in stats],
+        key=lambda x: x[1],
+        reverse=True,
+    )
 
     totals_chart = _make_svg_bar_chart(totals_data, "Total Downloads", "totals-chart")
     month_chart = _make_svg_bar_chart(month_data, "Last Month", "month-chart")
