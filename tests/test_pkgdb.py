@@ -1411,46 +1411,6 @@ class TestCLI:
         assert "No data found" in caplog.text
         assert "since 2024-06-01" in caplog.text
 
-    def test_main_init_command(self, temp_db, caplog):
-        """init command should add packages from PyPI user."""
-        # Mock the XML-RPC response
-        mock_packages = [["Owner", "package-a"], ["Owner", "package-b"]]
-
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "init", "--user", "testuser"]):
-            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
-                mock_proxy.return_value.user_packages.return_value = mock_packages
-                main()
-
-        assert "Found 2 packages" in caplog.text
-        assert "Added 2 packages" in caplog.text
-
-        # Verify packages were added to database
-        conn = get_db_connection(temp_db)
-        packages = get_packages(conn)
-        conn.close()
-        assert "package-a" in packages
-        assert "package-b" in packages
-
-    def test_main_init_command_user_not_found(self, temp_db, caplog):
-        """init command should handle API error (e.g., non-existent user)."""
-        import xmlrpc.client
-
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "init", "--user", "nonexistent"]):
-            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
-                mock_proxy.return_value.user_packages.side_effect = xmlrpc.client.Fault(1, "User not found")
-                main()
-
-        assert "Could not fetch" in caplog.text
-
-    def test_main_init_command_user_no_packages(self, temp_db, caplog):
-        """init command should handle user with no packages."""
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "init", "--user", "emptyuser"]):
-            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
-                mock_proxy.return_value.user_packages.return_value = []
-                main()
-
-        assert "No packages found" in caplog.text
-
     def test_main_sync_command_adds_new_packages(self, temp_db, caplog):
         """sync command should add new packages from PyPI user."""
         # First add an existing package

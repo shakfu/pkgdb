@@ -86,10 +86,7 @@ pkgdb cleanup
 # Prune stats older than N days
 pkgdb cleanup --days 365
 
-# Auto-populate packages from PyPI user account
-pkgdb init --user <pypi-username>
-
-# Refresh package list from PyPI user (add new packages since last sync)
+# Sync packages from PyPI user account (initial or refresh)
 pkgdb sync --user <pypi-username>
 
 # Sync and remove packages no longer in user's PyPI account
@@ -145,8 +142,7 @@ Modular CLI application with the following commands:
 - **remove**: Remove a package from tracking
 - **packages**: Show tracked packages with their added dates
 - **import**: Import packages from file (JSON or text)
-- **init**: Auto-populate packages from a PyPI user account
-- **sync**: Refresh package list from a PyPI user account (adds new packages only)
+- **sync**: Sync packages from a PyPI user account (with optional `--prune`)
 
 **Data operations:**
 - **fetch**: Fetch download stats from PyPI and store in SQLite

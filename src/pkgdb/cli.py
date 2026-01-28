@@ -14,7 +14,6 @@ from .logging import setup_logging
 from .service import PackageStatsService
 from .types import PackageStats
 from .utils import make_sparkline
-from .api import fetch_user_packages
 from . import __version__
 
 logger = logging.getLogger("pkgdb")
@@ -280,36 +279,6 @@ def cmd_import(args: argparse.Namespace) -> None:
         logger.error("File not found: %s", args.file)
 
 
-def cmd_init(args: argparse.Namespace) -> None:
-    """Init command: auto-populate packages from PyPI user account."""
-    username = args.user
-    logger.info("Fetching packages for PyPI user '%s'...", username)
-
-    packages = fetch_user_packages(username)
-    if packages is None:
-        logger.error(
-            "Could not fetch packages for user '%s'. User may not exist.", username
-        )
-        return
-
-    if not packages:
-        logger.warning("No packages found for user '%s'.", username)
-        return
-
-    logger.info("Found %d packages: %s", len(packages), ", ".join(packages))
-
-    service = PackageStatsService(args.database)
-    added = 0
-    skipped = 0
-    for pkg in packages:
-        if service.add_package(pkg):
-            added += 1
-        else:
-            skipped += 1
-
-    logger.info("Added %d packages (%d already tracked).", added, skipped)
-
-
 def cmd_sync(args: argparse.Namespace) -> None:
     """Sync command: refresh package list from PyPI user account."""
     username = args.user
@@ -547,24 +516,10 @@ def create_parser() -> argparse.ArgumentParser:
     )
     import_parser.set_defaults(func=cmd_import)
 
-    # init command
-    init_parser = subparsers.add_parser(
-        "init",
-        help="Auto-populate packages from a PyPI user account",
-    )
-    init_parser.add_argument(
-        "--user",
-        "-u",
-        required=True,
-        metavar="USERNAME",
-        help="PyPI username to fetch packages from",
-    )
-    init_parser.set_defaults(func=cmd_init)
-
     # sync command
     sync_parser = subparsers.add_parser(
         "sync",
-        help="Refresh package list from a PyPI user account (add new packages)",
+        help="Sync package list from a PyPI user account",
     )
     sync_parser.add_argument(
         "--user",
