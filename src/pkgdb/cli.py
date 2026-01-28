@@ -310,6 +310,43 @@ def cmd_init(args: argparse.Namespace) -> None:
     logger.info("Added %d packages (%d already tracked).", added, skipped)
 
 
+def cmd_sync(args: argparse.Namespace) -> None:
+    """Sync command: refresh package list from PyPI user account."""
+    username = args.user
+    logger.info("Syncing packages for PyPI user '%s'...", username)
+
+    service = PackageStatsService(args.database)
+    result = service.sync_packages_from_user(username)
+
+    if result is None:
+        logger.error(
+            "Could not fetch packages for user '%s'. User may not exist.", username
+        )
+        return
+
+    if result.added:
+        logger.info("Added %d new packages: %s", len(result.added), ", ".join(result.added))
+    else:
+        logger.info("No new packages to add.")
+
+    if result.already_tracked:
+        logger.debug(
+            "%d packages already tracked: %s",
+            len(result.already_tracked),
+            ", ".join(result.already_tracked),
+        )
+
+    if result.not_on_remote:
+        logger.warning(
+            "%d locally tracked packages not found in user's PyPI account: %s",
+            len(result.not_on_remote),
+            ", ".join(result.not_on_remote),
+        )
+
+    total = len(result.added) + len(result.already_tracked)
+    logger.info("Total packages from '%s': %d", username, total)
+
+
 def cmd_history(args: argparse.Namespace) -> None:
     """History command: show historical stats for a package."""
     service = PackageStatsService(args.database)
@@ -519,6 +556,20 @@ def create_parser() -> argparse.ArgumentParser:
         help="PyPI username to fetch packages from",
     )
     init_parser.set_defaults(func=cmd_init)
+
+    # sync command
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="Refresh package list from a PyPI user account (add new packages)",
+    )
+    sync_parser.add_argument(
+        "--user",
+        "-u",
+        required=True,
+        metavar="USERNAME",
+        help="PyPI username to sync packages from",
+    )
+    sync_parser.set_defaults(func=cmd_sync)
 
     # fetch command
     fetch_parser = subparsers.add_parser(

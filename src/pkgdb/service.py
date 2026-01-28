@@ -8,6 +8,7 @@ from .api import (
     fetch_os_stats,
     fetch_package_stats,
     fetch_python_versions,
+    fetch_user_packages,
 )
 from .db import (
     add_package,
@@ -53,6 +54,15 @@ class PackageDetails:
     stats: PackageStats | None
     python_versions: list[CategoryDownloads] | None
     os_stats: list[CategoryDownloads] | None
+
+
+@dataclass
+class SyncResult:
+    """Result of syncing packages from a PyPI user."""
+
+    added: list[str]
+    already_tracked: list[str]
+    not_on_remote: list[str]
 
 
 class PackageStatsService:
@@ -154,6 +164,46 @@ class PackageStatsService:
                 else:
                     skipped += 1
         return added, skipped, invalid
+
+    def sync_packages_from_user(self, username: str) -> SyncResult | None:
+        """Sync tracked packages with a PyPI user's current packages.
+
+        Fetches the user's packages from PyPI and adds any that aren't
+        already being tracked. Does not remove packages.
+
+        Args:
+            username: PyPI username to fetch packages from.
+
+        Returns:
+            SyncResult with lists of added, already tracked, and packages
+            not on remote (locally tracked but not in user's PyPI account).
+            Returns None if unable to fetch from PyPI.
+        """
+        remote_packages = fetch_user_packages(username)
+        if remote_packages is None:
+            return None
+
+        remote_set = set(remote_packages)
+        local_packages = [p.name for p in self.list_packages()]
+        local_set = set(local_packages)
+
+        # Packages on remote but not locally tracked
+        to_add = remote_set - local_set
+        # Packages both remote and local
+        already_tracked = remote_set & local_set
+        # Packages tracked locally but not on remote
+        not_on_remote = local_set - remote_set
+
+        added: list[str] = []
+        for pkg in sorted(to_add):
+            if self.add_package(pkg):
+                added.append(pkg)
+
+        return SyncResult(
+            added=added,
+            already_tracked=sorted(already_tracked),
+            not_on_remote=sorted(not_on_remote),
+        )
 
     # -------------------------------------------------------------------------
     # Data Fetching

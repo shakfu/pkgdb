@@ -45,6 +45,7 @@ from pkgdb import (
     PackageInfo,
     FetchResult,
     PackageDetails,
+    SyncResult,
     validate_package_name,
     validate_output_path,
     fetch_user_packages,
@@ -1450,6 +1451,77 @@ class TestCLI:
 
         assert "No packages found" in caplog.text
 
+    def test_main_sync_command_adds_new_packages(self, temp_db, caplog):
+        """sync command should add new packages from PyPI user."""
+        # First add an existing package
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "existing-pkg")
+        conn.close()
+
+        mock_packages = [["Owner", "existing-pkg"], ["Owner", "new-pkg"]]
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "sync", "--user", "testuser"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = mock_packages
+                main()
+
+        assert "Added 1 new packages" in caplog.text
+        assert "new-pkg" in caplog.text
+
+        # Verify new package was added
+        conn = get_db_connection(temp_db)
+        packages = get_packages(conn)
+        conn.close()
+        assert "existing-pkg" in packages
+        assert "new-pkg" in packages
+
+    def test_main_sync_command_no_new_packages(self, temp_db, caplog):
+        """sync command should report when no new packages to add."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        add_package(conn, "pkg-b")
+        conn.close()
+
+        mock_packages = [["Owner", "pkg-a"], ["Owner", "pkg-b"]]
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "sync", "--user", "testuser"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = mock_packages
+                main()
+
+        assert "No new packages to add" in caplog.text
+
+    def test_main_sync_command_warns_not_on_remote(self, temp_db, caplog):
+        """sync command should warn about packages not on remote."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "local-only-pkg")
+        add_package(conn, "common-pkg")
+        conn.close()
+
+        mock_packages = [["Owner", "common-pkg"]]
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "sync", "--user", "testuser"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = mock_packages
+                main()
+
+        assert "locally tracked packages not found" in caplog.text
+        assert "local-only-pkg" in caplog.text
+
+    def test_main_sync_command_user_not_found(self, temp_db, caplog):
+        """sync command should handle API error."""
+        import xmlrpc.client
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "sync", "--user", "nonexistent"]):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.side_effect = xmlrpc.client.Fault(1, "User not found")
+                main()
+
+        assert "Could not fetch" in caplog.text
+
 
 class TestFetchUserPackages:
     """Tests for fetch_user_packages function."""
@@ -1960,6 +2032,89 @@ class TestPackageStatsService:
             assert result is False
         finally:
             Path(output_path).unlink(missing_ok=True)
+
+    def test_service_sync_packages_adds_new(self, temp_db):
+        """sync_packages_from_user should add packages not already tracked."""
+        service = PackageStatsService(temp_db)
+        service.add_package("existing-pkg")
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["existing-pkg", "new-pkg-1", "new-pkg-2"]
+            result = service.sync_packages_from_user("testuser")
+
+        assert isinstance(result, SyncResult)
+        assert result.added == ["new-pkg-1", "new-pkg-2"]
+        assert result.already_tracked == ["existing-pkg"]
+        assert result.not_on_remote == []
+
+        # Verify packages were actually added
+        packages = [p.name for p in service.list_packages()]
+        assert "existing-pkg" in packages
+        assert "new-pkg-1" in packages
+        assert "new-pkg-2" in packages
+
+    def test_service_sync_packages_detects_not_on_remote(self, temp_db):
+        """sync_packages_from_user should detect locally tracked packages not on remote."""
+        service = PackageStatsService(temp_db)
+        service.add_package("local-only-pkg")
+        service.add_package("common-pkg")
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["common-pkg", "new-remote-pkg"]
+            result = service.sync_packages_from_user("testuser")
+
+        assert result.added == ["new-remote-pkg"]
+        assert result.already_tracked == ["common-pkg"]
+        assert result.not_on_remote == ["local-only-pkg"]
+
+    def test_service_sync_packages_empty_remote(self, temp_db):
+        """sync_packages_from_user should handle user with no packages."""
+        service = PackageStatsService(temp_db)
+        service.add_package("local-pkg")
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = []
+            result = service.sync_packages_from_user("testuser")
+
+        assert result.added == []
+        assert result.already_tracked == []
+        assert result.not_on_remote == ["local-pkg"]
+
+    def test_service_sync_packages_empty_local(self, temp_db):
+        """sync_packages_from_user should add all packages when none tracked."""
+        service = PackageStatsService(temp_db)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["pkg-a", "pkg-b"]
+            result = service.sync_packages_from_user("testuser")
+
+        assert result.added == ["pkg-a", "pkg-b"]
+        assert result.already_tracked == []
+        assert result.not_on_remote == []
+
+    def test_service_sync_packages_api_error(self, temp_db):
+        """sync_packages_from_user should return None on API error."""
+        service = PackageStatsService(temp_db)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = None
+            result = service.sync_packages_from_user("testuser")
+
+        assert result is None
+
+    def test_service_sync_packages_no_changes(self, temp_db):
+        """sync_packages_from_user should handle case where all packages already tracked."""
+        service = PackageStatsService(temp_db)
+        service.add_package("pkg-a")
+        service.add_package("pkg-b")
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["pkg-a", "pkg-b"]
+            result = service.sync_packages_from_user("testuser")
+
+        assert result.added == []
+        assert sorted(result.already_tracked) == ["pkg-a", "pkg-b"]
+        assert result.not_on_remote == []
 
 
 class TestPackageNameValidation:

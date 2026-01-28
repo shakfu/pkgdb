@@ -89,6 +89,9 @@ pkgdb cleanup --days 365
 # Auto-populate packages from PyPI user account
 pkgdb init --user <pypi-username>
 
+# Refresh package list from PyPI user (add new packages since last sync)
+pkgdb sync --user <pypi-username>
+
 # Show version
 pkgdb version
 ```
@@ -140,6 +143,7 @@ Modular CLI application with the following commands:
 - **packages**: Show tracked packages with their added dates
 - **import**: Import packages from file (JSON or text)
 - **init**: Auto-populate packages from a PyPI user account
+- **sync**: Refresh package list from a PyPI user account (adds new packages only)
 
 **Data operations:**
 - **fetch**: Fetch download stats from PyPI and store in SQLite

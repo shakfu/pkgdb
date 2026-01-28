@@ -61,6 +61,7 @@ from .service import (
     PackageDetails,
     PackageInfo,
     PackageStatsService,
+    SyncResult,
 )
 from .types import (
     CategoryDownloads,
@@ -126,6 +127,7 @@ __all__ = [
     "PackageDetails",
     "PackageInfo",
     "PackageStatsService",
+    "SyncResult",
     # Types
     "CategoryDownloads",
     "EnvSummary",
