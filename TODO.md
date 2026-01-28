@@ -22,8 +22,8 @@ Feature ideas for pkgdb, ordered by priority.
 - [x] Relative date queries - `pkgdb history requests --since 7d`
 
 ### Badges & CI
-- [ ] Badge generation - SVG badges for READMEs showing download counts
-- [ ] GitHub Actions template - automated daily/weekly fetch + report
+- [x] Badge generation - SVG badges for READMEs showing download counts
+- [x] GitHub Actions template - automated daily/weekly fetch + report
 
 ## Medium Priority
 
@@ -33,7 +33,7 @@ Feature ideas for pkgdb, ordered by priority.
 
 ### Database Maintenance
 - [x] `pkgdb cleanup --days N` to prune old data
-- [ ] Database size/stats info in `pkgdb show`
+- [x] Database size/stats info in `pkgdb show`
 - [ ] Backup/restore - `pkgdb backup` / `pkgdb restore`
 
 ### Package Discovery

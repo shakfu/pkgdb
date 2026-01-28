@@ -147,9 +147,33 @@ def cmd_update(args: argparse.Namespace) -> None:
     cmd_report(args)
 
 
+def _format_size(size_bytes: int) -> str:
+    """Format bytes as human-readable size."""
+    for unit in ["B", "KB", "MB", "GB"]:
+        if size_bytes < 1024:
+            return f"{size_bytes:.1f} {unit}" if unit != "B" else f"{size_bytes} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.1f} TB"
+
+
 def cmd_show(args: argparse.Namespace) -> None:
     """Show command: display stored statistics in terminal."""
     service = PackageStatsService(args.database)
+
+    # Handle --info flag
+    if getattr(args, "info", False):
+        db_info = service.get_database_info()
+        print("Database Info")
+        print(f"  Location:    {args.database}")
+        print(f"  Size:        {_format_size(db_info['db_size_bytes'])}")
+        print(f"  Packages:    {db_info['package_count']}")
+        print(f"  Records:     {db_info['record_count']:,}")
+        if db_info["first_fetch"] and db_info["last_fetch"]:
+            print(f"  Date range:  {db_info['first_fetch']} to {db_info['last_fetch']}")
+        else:
+            print("  Date range:  (no data)")
+        return
+
     stats = service.get_stats(with_growth=True)
 
     if not stats:
@@ -455,6 +479,29 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     logger.info("Database has %d tracked packages.", remaining)
 
 
+def cmd_badge(args: argparse.Namespace) -> None:
+    """Badge command: generate SVG badge for a package."""
+    service = PackageStatsService(args.database)
+
+    svg = service.generate_badge(
+        args.package,
+        period=args.period,
+        color=getattr(args, "color", None),
+    )
+
+    if svg is None:
+        logger.error("No stats found for package '%s'. Run 'fetch' first.", args.package)
+        return
+
+    output = getattr(args, "output", None)
+    if output:
+        with open(output, "w") as f:
+            f.write(svg)
+        logger.info("Badge saved to %s", output)
+    else:
+        print(svg)
+
+
 def cmd_version(args: argparse.Namespace) -> None:
     """Version command: show pkgdb version."""
     print(f"pkgdb {__version__}")
@@ -590,6 +637,11 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Output in JSON format",
     )
+    show_parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Show database info (size, record counts, date range)",
+    )
     show_parser.set_defaults(func=cmd_show)
 
     # report command
@@ -704,6 +756,35 @@ def create_parser() -> argparse.ArgumentParser:
         help="Also prune stats older than N days",
     )
     cleanup_parser.set_defaults(func=cmd_cleanup)
+
+    # badge command
+    badge_parser = subparsers.add_parser(
+        "badge",
+        help="Generate SVG badge for a package",
+    )
+    badge_parser.add_argument(
+        "package",
+        help="Package name to generate badge for",
+    )
+    badge_parser.add_argument(
+        "-p",
+        "--period",
+        choices=["total", "month", "week", "day"],
+        default="total",
+        help="Download period to show (default: total)",
+    )
+    badge_parser.add_argument(
+        "-c",
+        "--color",
+        help="Badge color (e.g., 'green', 'blue', '#4c1')",
+    )
+    badge_parser.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="Output file (default: stdout)",
+    )
+    badge_parser.set_defaults(func=cmd_badge)
 
     # version command
     version_parser = subparsers.add_parser(

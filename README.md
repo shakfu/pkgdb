@@ -34,13 +34,16 @@ Or use an object with a `published` key:
 {"published": ["my-package", "another-package"]}
 ```
 
-Alternatively, use `pkgdb add <package>` to add packages individually.
+Alternatively, use `pkgdb add <package>` to add packages individually. By default, packages are verified to exist on PyPI before adding. Use `--no-verify` to skip this check.
 
 ### Commands
 
 ```bash
-# Add a package to tracking
+# Add a package to tracking (verifies it exists on PyPI)
 pkgdb add <package-name>
+
+# Add without verification (offline/bulk use)
+pkgdb add <package-name> --no-verify
 
 # Remove a package from tracking
 pkgdb remove <package-name>
@@ -60,6 +63,12 @@ pkgdb show
 # Show historical stats for a specific package
 pkgdb history <package-name>
 
+# Show history since a date (absolute or relative)
+pkgdb history <package-name> --since 2024-01-01
+pkgdb history <package-name> --since 7d   # last 7 days
+pkgdb history <package-name> --since 2w   # last 2 weeks
+pkgdb history <package-name> --since 1m   # last month (30 days)
+
 # Generate HTML report with charts (opens in browser)
 pkgdb report
 
@@ -76,6 +85,18 @@ pkgdb export -f markdown # Markdown table
 
 # Show detailed stats for a package (Python versions, OS breakdown)
 pkgdb stats <package-name>
+
+# Show database info (size, record counts, date range)
+pkgdb show --info
+
+# Generate SVG badge for a package
+pkgdb badge <package-name>
+
+# Badge for monthly downloads
+pkgdb badge <package-name> --period month
+
+# Save badge to file
+pkgdb badge <package-name> -o badge.svg
 
 # Fetch stats and generate report in one step
 pkgdb update
@@ -117,8 +138,12 @@ pkgdb report --no-browser
 # Limit history output to N days
 pkgdb history my-package -n 14
 
-# Show history since a specific date
+# Show history since a specific date (or relative: 7d, 2w, 1m)
 pkgdb history my-package --since 2024-01-01
+pkgdb history my-package --since 7d
+
+# Skip package verification on import
+pkgdb import packages.json --no-verify
 
 # Limit show output to top N packages
 pkgdb show --limit 10
@@ -153,6 +178,7 @@ Modular CLI application with the following commands:
 
 **Reporting:**
 - **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With package argument, generates detailed single-package report
+- **badge**: Generate shields.io-style SVG badge for a package
 - **update**: Run fetch then report in one step
 
 **Maintenance:**
@@ -184,6 +210,7 @@ Source modules in `src/pkgdb/`:
 - `db.py`: Database operations and context manager
 - `api.py`: pypistats API wrapper with parallel fetching
 - `reports.py`: HTML/SVG report generation
+- `badges.py`: SVG badge generation
 - `export.py`: CSV/JSON/Markdown export
 - `utils.py`: Helper functions and validation
 - `types.py`: TypedDict definitions for type safety
@@ -193,6 +220,14 @@ Data files (all in `~/.pkgdb/`):
 - `packages.json`: Package list configuration (optional, can use `add` command instead)
 - `pkg.db`: SQLite database (auto-created)
 - `report.html`: Generated HTML report (default output)
+
+## GitHub Actions
+
+An example workflow is provided at `.github/workflows/fetch-stats.yml.example` for automated daily stats fetching. To use it:
+
+1. Copy to `.github/workflows/fetch-stats.yml` (remove `.example`)
+2. Configure your package list or PyPI username
+3. The workflow will fetch stats daily and commit updates to your repo
 
 ## Development
 

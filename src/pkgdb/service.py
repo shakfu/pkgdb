@@ -1,6 +1,7 @@
 """Service layer for pkgdb - provides a clean abstraction over database and API operations."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 from .api import (
@@ -15,6 +16,7 @@ from .db import (
     add_package,
     cleanup_orphaned_stats,
     get_all_history,
+    get_database_stats,
     get_db,
     get_latest_stats,
     get_package_history,
@@ -24,9 +26,10 @@ from .db import (
     remove_package,
     store_stats,
 )
+from .badges import generate_downloads_badge
 from .export import export_csv, export_json, export_markdown
 from .reports import generate_html_report, generate_package_html_report
-from .types import CategoryDownloads, PackageStats
+from .types import CategoryDownloads, DatabaseInfo, PackageStats
 from .utils import validate_output_path, validate_package_name
 
 
@@ -488,6 +491,47 @@ class PackageStatsService:
         else:
             raise ValueError(f"Unknown format: {format}")
 
+    def generate_badge(
+        self,
+        package: str,
+        period: str = "total",
+        color: str | None = None,
+    ) -> str | None:
+        """Generate an SVG badge for a package's download count.
+
+        Args:
+            package: Package name.
+            period: One of "total", "month", "week", "day".
+            color: Badge color (default: auto-select based on count).
+
+        Returns:
+            SVG string for the badge, or None if no stats available.
+        """
+        stats = self.get_stats()
+        if not stats:
+            return None
+
+        # Find the package
+        pkg_stats = None
+        for s in stats:
+            if s["package_name"] == package:
+                pkg_stats = s
+                break
+
+        if pkg_stats is None:
+            return None
+
+        # Get the appropriate count
+        count_map = {
+            "total": pkg_stats.get("total") or 0,
+            "month": pkg_stats.get("last_month") or 0,
+            "week": pkg_stats.get("last_week") or 0,
+            "day": pkg_stats.get("last_day") or 0,
+        }
+        count = count_map.get(period, count_map["total"])
+
+        return generate_downloads_badge(count, period=period, color=color)
+
     # -------------------------------------------------------------------------
     # Maintenance
     # -------------------------------------------------------------------------
@@ -516,3 +560,24 @@ class PackageStatsService:
         """
         with get_db(self.db_path) as conn:
             return prune_old_stats(conn, days)
+
+    def get_database_info(self) -> DatabaseInfo:
+        """Get database statistics and metadata.
+
+        Returns:
+            DatabaseInfo with package count, record count, date range, and file size.
+        """
+        with get_db(self.db_path) as conn:
+            stats = get_database_stats(conn)
+
+        # Get file size
+        db_path = Path(self.db_path)
+        db_size = db_path.stat().st_size if db_path.exists() else 0
+
+        return DatabaseInfo(
+            package_count=stats["package_count"],
+            record_count=stats["record_count"],
+            first_fetch=stats["first_fetch"],
+            last_fetch=stats["last_fetch"],
+            db_size_bytes=db_size,
+        )

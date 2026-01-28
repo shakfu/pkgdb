@@ -24,6 +24,7 @@ from pkgdb import (
     get_latest_stats,
     get_package_history,
     get_all_history,
+    get_database_stats,
     calculate_growth,
     make_sparkline,
     export_csv,
@@ -36,6 +37,9 @@ from pkgdb import (
     make_svg_pie_chart,
     generate_html_report,
     generate_package_html_report,
+    generate_badge_svg,
+    generate_downloads_badge,
+    BADGE_COLORS,
     main,
     get_config_dir,
     DEFAULT_DB_FILE,
@@ -46,6 +50,7 @@ from pkgdb import (
     FetchResult,
     PackageDetails,
     SyncResult,
+    DatabaseInfo,
     validate_package_name,
     validate_output_path,
     fetch_user_packages,
@@ -3359,3 +3364,268 @@ class TestCLINoVerifyFlag:
         sys.stdout = old_stdout
 
         assert "7d" in help_text or "relative" in help_text.lower()
+
+
+# =============================================================================
+# Database Info Tests
+# =============================================================================
+
+
+class TestDatabaseInfo:
+    """Tests for database info/stats functionality."""
+
+    def test_get_database_stats_empty_db(self, db_conn):
+        """get_database_stats should return zeros for empty database."""
+        stats = get_database_stats(db_conn)
+
+        assert stats["package_count"] == 0
+        assert stats["record_count"] == 0
+        assert stats["first_fetch"] is None
+        assert stats["last_fetch"] is None
+
+    def test_get_database_stats_with_data(self, db_conn):
+        """get_database_stats should return correct counts."""
+        # Add packages
+        add_package(db_conn, "pkg-a")
+        add_package(db_conn, "pkg-b")
+
+        # Add stats records
+        db_conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('pkg-a', '2024-01-01', 10, 70, 300, 1000)
+        """)
+        db_conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('pkg-a', '2024-01-02', 15, 75, 310, 1015)
+        """)
+        db_conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('pkg-b', '2024-01-02', 5, 35, 150, 500)
+        """)
+        db_conn.commit()
+
+        stats = get_database_stats(db_conn)
+
+        assert stats["package_count"] == 2
+        assert stats["record_count"] == 3
+        assert stats["first_fetch"] == "2024-01-01"
+        assert stats["last_fetch"] == "2024-01-02"
+
+    def test_service_get_database_info(self, temp_db):
+        """Service.get_database_info should return DatabaseInfo."""
+        service = PackageStatsService(temp_db)
+        service.add_package("test-pkg", verify=False)
+
+        # Add a stats record
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-15', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        info = service.get_database_info()
+
+        assert info["package_count"] == 1
+        assert info["record_count"] == 1
+        assert info["first_fetch"] == "2024-01-15"
+        assert info["last_fetch"] == "2024-01-15"
+        assert info["db_size_bytes"] > 0
+
+    def test_show_info_flag_exists(self):
+        """show command should have --info flag."""
+        from pkgdb.cli import create_parser
+
+        parser = create_parser()
+        args = parser.parse_args(["show", "--info"])
+        assert args.info is True
+
+    def test_show_info_flag_defaults_false(self):
+        """show --info should default to False."""
+        from pkgdb.cli import create_parser
+
+        parser = create_parser()
+        args = parser.parse_args(["show"])
+        assert getattr(args, "info", False) is False
+
+    def test_cmd_show_with_info_flag(self, temp_db, capsys):
+        """cmd_show with --info should display database info."""
+        service = PackageStatsService(temp_db)
+        service.add_package("test-pkg", verify=False)
+
+        # Add stats
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-15', 10, 70, 300, 1000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--info"]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "Database Info" in captured.out
+        assert "Packages:" in captured.out
+        assert "Records:" in captured.out
+        assert "Date range:" in captured.out
+
+
+# =============================================================================
+# Badge Generation Tests
+# =============================================================================
+
+
+class TestBadgeGeneration:
+    """Tests for SVG badge generation."""
+
+    def test_generate_badge_svg_basic(self):
+        """generate_badge_svg should return valid SVG."""
+        svg = generate_badge_svg("downloads", "1.2M")
+
+        assert svg.startswith("<svg")
+        assert "</svg>" in svg
+        assert "downloads" in svg
+        assert "1.2M" in svg
+
+    def test_generate_badge_svg_custom_colors(self):
+        """generate_badge_svg should accept custom colors."""
+        svg = generate_badge_svg("test", "value", color="#ff0000", label_color="#00ff00")
+
+        assert "#ff0000" in svg
+        assert "#00ff00" in svg
+
+    def test_generate_downloads_badge_formats_count(self):
+        """generate_downloads_badge should format large numbers."""
+        # Test millions
+        svg = generate_downloads_badge(1_500_000)
+        assert "1.5M" in svg
+
+        # Test thousands
+        svg = generate_downloads_badge(45_000)
+        assert "45.0K" in svg
+
+        # Test small numbers
+        svg = generate_downloads_badge(500)
+        assert "500" in svg
+
+    def test_generate_downloads_badge_periods(self):
+        """generate_downloads_badge should use correct labels for periods."""
+        svg_total = generate_downloads_badge(1000, period="total")
+        assert "downloads" in svg_total
+
+        svg_month = generate_downloads_badge(1000, period="month")
+        assert "downloads/month" in svg_month
+
+        svg_week = generate_downloads_badge(1000, period="week")
+        assert "downloads/week" in svg_week
+
+        svg_day = generate_downloads_badge(1000, period="day")
+        assert "downloads/day" in svg_day
+
+    def test_generate_downloads_badge_auto_color(self):
+        """generate_downloads_badge should auto-select color based on count."""
+        # High count should get bright green
+        svg_high = generate_downloads_badge(2_000_000)
+        assert BADGE_COLORS["brightgreen"] in svg_high
+
+        # Low count should get gray
+        svg_low = generate_downloads_badge(100)
+        assert BADGE_COLORS["gray"] in svg_low
+
+    def test_service_generate_badge(self, temp_db):
+        """Service.generate_badge should return SVG for tracked package."""
+        service = PackageStatsService(temp_db)
+
+        # Add package and stats
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO packages (package_name, added_date) VALUES ('test-pkg', '2024-01-01')"
+        )
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-15', 100, 700, 3000, 50000)
+        """)
+        conn.commit()
+        conn.close()
+
+        svg = service.generate_badge("test-pkg")
+        assert svg is not None
+        assert "<svg" in svg
+        assert "50.0K" in svg  # 50000 formatted
+
+    def test_service_generate_badge_different_periods(self, temp_db):
+        """Service.generate_badge should support different periods."""
+        service = PackageStatsService(temp_db)
+
+        # Add package and stats
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO packages (package_name, added_date) VALUES ('test-pkg', '2024-01-01')"
+        )
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-15', 100, 700, 3000, 50000)
+        """)
+        conn.commit()
+        conn.close()
+
+        svg_month = service.generate_badge("test-pkg", period="month")
+        assert "3.0K" in svg_month  # 3000 formatted
+        assert "downloads/month" in svg_month
+
+    def test_service_generate_badge_nonexistent_package(self, temp_db):
+        """Service.generate_badge should return None for unknown package."""
+        service = PackageStatsService(temp_db)
+
+        svg = service.generate_badge("nonexistent-pkg")
+        assert svg is None
+
+    def test_badge_cli_parser(self):
+        """badge command should have correct arguments."""
+        from pkgdb.cli import create_parser
+
+        parser = create_parser()
+        args = parser.parse_args(["badge", "test-pkg"])
+        assert args.package == "test-pkg"
+        assert args.period == "total"
+
+        args = parser.parse_args(["badge", "test-pkg", "-p", "month", "-o", "badge.svg"])
+        assert args.period == "month"
+        assert args.output == "badge.svg"
+
+    def test_cmd_badge_outputs_svg(self, temp_db, capsys):
+        """cmd_badge should output SVG to stdout."""
+        # Add package and stats
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute(
+            "INSERT INTO packages (package_name, added_date) VALUES ('test-pkg', '2024-01-01')"
+        )
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES ('test-pkg', '2024-01-15', 100, 700, 3000, 50000)
+        """)
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "badge", "test-pkg"]):
+            main()
+
+        captured = capsys.readouterr()
+        assert "<svg" in captured.out
+        assert "</svg>" in captured.out

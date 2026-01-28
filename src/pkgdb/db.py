@@ -314,3 +314,33 @@ def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
     )
     conn.commit()
     return cursor.rowcount
+
+
+def get_database_stats(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Get database statistics.
+
+    Returns:
+        Dict with package_count, record_count, first_fetch, and last_fetch.
+    """
+    # Get package count
+    cursor = conn.execute("SELECT COUNT(*) as count FROM packages")
+    package_count = cursor.fetchone()["count"]
+
+    # Get record count
+    cursor = conn.execute("SELECT COUNT(*) as count FROM package_stats")
+    record_count = cursor.fetchone()["count"]
+
+    # Get date range
+    cursor = conn.execute(
+        "SELECT MIN(fetch_date) as first, MAX(fetch_date) as last FROM package_stats"
+    )
+    row = cursor.fetchone()
+    first_fetch = row["first"]
+    last_fetch = row["last"]
+
+    return {
+        "package_count": package_count,
+        "record_count": record_count,
+        "first_fetch": first_fetch,
+        "last_fetch": last_fetch,
+    }

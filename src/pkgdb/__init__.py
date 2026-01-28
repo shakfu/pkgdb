@@ -5,7 +5,7 @@ Reads published packages from packages.yml, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.1.5"
+__version__ = "0.1.6"
 
 # Re-export public API from submodules
 from .api import (
@@ -16,6 +16,11 @@ from .api import (
     fetch_package_stats,
     fetch_python_versions,
     fetch_user_packages,
+)
+from .badges import (
+    BADGE_COLORS,
+    generate_badge_svg,
+    generate_downloads_badge,
 )
 from .cli import (
     DEFAULT_PACKAGES_FILE,
@@ -31,6 +36,7 @@ from .db import (
     cleanup_orphaned_stats,
     get_all_history,
     get_config_dir,
+    get_database_stats,
     get_db,
     get_db_connection,
     get_latest_stats,
@@ -66,6 +72,7 @@ from .service import (
 )
 from .types import (
     CategoryDownloads,
+    DatabaseInfo,
     EnvSummary,
     HistoryRecord,
     PackageStats,
@@ -90,6 +97,10 @@ __all__ = [
     "fetch_package_stats",
     "fetch_python_versions",
     "fetch_user_packages",
+    # Badges
+    "BADGE_COLORS",
+    "generate_badge_svg",
+    "generate_downloads_badge",
     # CLI
     "DEFAULT_PACKAGES_FILE",
     "import_packages_from_file",
@@ -103,6 +114,7 @@ __all__ = [
     "cleanup_orphaned_stats",
     "get_all_history",
     "get_config_dir",
+    "get_database_stats",
     "get_db",
     "get_db_connection",
     "get_latest_stats",
@@ -133,6 +145,7 @@ __all__ = [
     "SyncResult",
     # Types
     "CategoryDownloads",
+    "DatabaseInfo",
     "EnvSummary",
     "HistoryRecord",
     "PackageStats",

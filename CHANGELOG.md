@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6]
+
 ### Added
 
 - Package validation: `add` and `import` commands now verify packages exist on PyPI before adding
@@ -18,8 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `2w` for 2 weeks ago
   - `1m` for 1 month ago (treated as 30 days)
   - Still supports `YYYY-MM-DD` format
-- New functions: `check_package_exists()`, `parse_date_arg()`
+- New functions: `check_package_exists()`, `parse_date_arg()`, `get_database_stats()`
 - Service methods `add_package()` and `import_packages()` now accept `verify` parameter
+- Database info: `pkgdb show --info` displays database statistics (file size, package count, record count, date range)
+- New type: `DatabaseInfo` TypedDict for database statistics
+- Badge generation: `pkgdb badge <package>` generates shields.io-style SVG badges
+  - Supports `--period` flag for total/month/week/day
+  - Auto-selects color based on download count
+  - Output to file with `-o` or stdout
+- GitHub Actions workflow template: `.github/workflows/fetch-stats.yml.example`
+- New module: `badges.py` with `generate_badge_svg()` and `generate_downloads_badge()`
 
 ### Changed
 

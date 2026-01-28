@@ -50,3 +50,13 @@ class StatsWithGrowth(TypedDict, total=False):
     total: int | None
     week_growth: float | None
     month_growth: float | None
+
+
+class DatabaseInfo(TypedDict):
+    """Database statistics and metadata."""
+
+    package_count: int
+    record_count: int
+    first_fetch: str | None
+    last_fetch: str | None
+    db_size_bytes: int

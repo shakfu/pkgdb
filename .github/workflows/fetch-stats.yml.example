@@ -1,0 +1,73 @@
+# Example GitHub Actions workflow for automated pkgdb stats fetching
+#
+# This workflow:
+# 1. Runs daily at midnight UTC (configurable)
+# 2. Fetches download stats from PyPI
+# 3. Generates an HTML report
+# 4. Commits the updated database and report to the repo
+#
+# To use this workflow:
+# 1. Copy this file to .github/workflows/fetch-stats.yml (remove .example)
+# 2. Create a packages.json file listing your packages, or use --user flag
+# 3. Ensure the workflow has write permissions to your repo
+#
+# Note: The database (pkg.db) and report (report.html) will be committed
+# to your repository. Add them to .gitignore if you don't want this.
+
+name: Fetch PyPI Stats
+
+on:
+  schedule:
+    # Run daily at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-stats:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pkgdb
+        run: pip install pkgdb
+
+      - name: Fetch stats
+        run: |
+          # Option 1: Import from packages.json file
+          # pkgdb import packages.json --no-verify
+
+          # Option 2: Sync from PyPI user account
+          # pkgdb sync --user YOUR_PYPI_USERNAME
+
+          # Fetch latest stats
+          pkgdb fetch
+
+      - name: Generate report
+        run: pkgdb report --no-browser -o report.html
+
+      - name: Generate badges (optional)
+        run: |
+          mkdir -p badges
+          # Generate badges for each package (example)
+          # for pkg in package1 package2; do
+          #   pkgdb badge $pkg -o badges/${pkg}.svg
+          #   pkgdb badge $pkg --period month -o badges/${pkg}-monthly.svg
+          # done
+
+      - name: Commit changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add -A
+          git diff --staged --quiet || git commit -m "Update PyPI download stats [skip ci]"
+          git push
