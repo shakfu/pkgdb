@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5]
+
 ### Added
 
 - `sync` command: `pkgdb sync --user <username>` refreshes the package list from a PyPI user account, adding any new packages published since the last sync without duplicating existing ones
