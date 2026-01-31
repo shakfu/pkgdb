@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7]
+
+### Added
+
+- Fetch attempt tracking: packages are only fetched once per 24-hour period
+  - New `fetch_attempts` table tracks when each package was last fetched
+  - Both successful and failed fetch attempts are recorded
+  - Subsequent `pkgdb update` or `pkgdb fetch` runs skip recently-attempted packages
+  - CLI reports skipped count: "Skipped N packages (already fetched in last 24 hours)"
+  - Shows "All packages already up to date" when nothing needs fetching
+- "Recent Downloads (Last Day)" chart in HTML reports, displayed after the "Last Month" chart
+- New functions: `record_fetch_attempt()`, `get_packages_needing_update()`
+- `FetchResult` dataclass now includes `skipped` field
+
 ## [0.1.6]
 
 ### Added

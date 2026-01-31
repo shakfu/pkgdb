@@ -17,6 +17,8 @@ from pkgdb import (
     add_package,
     remove_package,
     get_packages,
+    get_packages_needing_update,
+    record_fetch_attempt,
     import_packages_from_file,
     load_packages_from_file,
     store_stats,
@@ -1851,6 +1853,7 @@ class TestPackageStatsService:
         assert isinstance(result, FetchResult)
         assert result.success == 1
         assert result.failed == 0
+        assert result.skipped == 0
         assert "test-pkg" in result.results
         assert result.results["test-pkg"]["total"] == 50000
 
@@ -2956,10 +2959,172 @@ class TestBatchStatsStorage:
 
         assert result.success == 2
         assert result.failed == 0
+        assert result.skipped == 0
 
         # Both should be stored
         stats = service.get_stats()
         assert len(stats) == 2
+
+
+# =============================================================================
+# Fetch Attempt Tracking Tests
+# =============================================================================
+
+
+class TestFetchAttemptTracking:
+    """Tests for fetch attempt tracking functionality."""
+
+    def test_record_fetch_attempt_success(self, temp_db):
+        """record_fetch_attempt should store successful attempts."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        record_fetch_attempt(conn, "test-pkg", success=True)
+
+        cursor = conn.execute(
+            "SELECT * FROM fetch_attempts WHERE package_name = ?",
+            ("test-pkg",)
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        assert row["package_name"] == "test-pkg"
+        assert row["success"] == 1
+        assert row["attempt_time"] is not None
+        conn.close()
+
+    def test_record_fetch_attempt_failure(self, temp_db):
+        """record_fetch_attempt should store failed attempts."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        record_fetch_attempt(conn, "test-pkg", success=False)
+
+        cursor = conn.execute(
+            "SELECT * FROM fetch_attempts WHERE package_name = ?",
+            ("test-pkg",)
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        assert row["success"] == 0
+        conn.close()
+
+    def test_record_fetch_attempt_updates_existing(self, temp_db):
+        """record_fetch_attempt should update existing records."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        # First attempt fails
+        record_fetch_attempt(conn, "test-pkg", success=False)
+        # Second attempt succeeds
+        record_fetch_attempt(conn, "test-pkg", success=True)
+
+        cursor = conn.execute(
+            "SELECT COUNT(*) as count FROM fetch_attempts WHERE package_name = ?",
+            ("test-pkg",)
+        )
+        assert cursor.fetchone()["count"] == 1
+
+        cursor = conn.execute(
+            "SELECT success FROM fetch_attempts WHERE package_name = ?",
+            ("test-pkg",)
+        )
+        assert cursor.fetchone()["success"] == 1
+        conn.close()
+
+    def test_get_packages_needing_update_all_packages(self, temp_db):
+        """get_packages_needing_update should return all packages when none have been fetched."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        add_package(conn, "pkg-b")
+
+        packages = get_packages_needing_update(conn)
+        assert set(packages) == {"pkg-a", "pkg-b"}
+        conn.close()
+
+    def test_get_packages_needing_update_excludes_recent(self, temp_db):
+        """get_packages_needing_update should exclude recently fetched packages."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        add_package(conn, "pkg-b")
+        add_package(conn, "pkg-c")
+
+        # Mark pkg-a as recently fetched
+        record_fetch_attempt(conn, "pkg-a", success=True)
+
+        packages = get_packages_needing_update(conn)
+        assert "pkg-a" not in packages
+        assert set(packages) == {"pkg-b", "pkg-c"}
+        conn.close()
+
+    def test_get_packages_needing_update_includes_old_attempts(self, temp_db):
+        """get_packages_needing_update should include packages with old attempts."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+
+        # Insert an old attempt (25 hours ago)
+        conn.execute(
+            """
+            INSERT INTO fetch_attempts (package_name, attempt_time, success)
+            VALUES (?, datetime('now', '-25 hours'), 1)
+            """,
+            ("pkg-a",)
+        )
+        conn.commit()
+
+        packages = get_packages_needing_update(conn)
+        assert "pkg-a" in packages
+        conn.close()
+
+    def test_service_fetch_skips_recent_packages(self, temp_db):
+        """Service fetch_all_stats should skip recently fetched packages."""
+        service = PackageStatsService(temp_db)
+        service.add_package("pkg-a", verify=False)
+        service.add_package("pkg-b", verify=False)
+
+        recent_response = json.dumps({
+            "data": {"last_day": 100, "last_week": 700, "last_month": 3000}
+        })
+        overall_response = json.dumps({
+            "data": [{"category": "without_mirrors", "downloads": 50000}]
+        })
+
+        # First fetch - both packages
+        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
+                result1 = service.fetch_all_stats()
+
+        assert result1.success == 2
+        assert result1.skipped == 0
+
+        # Second fetch - both should be skipped
+        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
+                result2 = service.fetch_all_stats()
+
+        assert result2.success == 0
+        assert result2.skipped == 2
+
+    def test_service_fetch_records_failed_attempts(self, temp_db):
+        """Service fetch_all_stats should record failed fetch attempts."""
+        service = PackageStatsService(temp_db)
+        service.add_package("failing-pkg", verify=False)
+
+        # Mock API to fail with ValueError (which is in _API_ERRORS)
+        with patch("pkgdb.api.pypistats.recent", side_effect=ValueError("API error")):
+            result1 = service.fetch_all_stats()
+
+        assert result1.failed == 1
+        assert result1.success == 0
+
+        # Second fetch should skip the failed package too (within 24 hours)
+        with patch("pkgdb.api.pypistats.recent", side_effect=ValueError("API error")):
+            result2 = service.fetch_all_stats()
+
+        assert result2.skipped == 1
+        assert result2.failed == 0
 
 
 # =============================================================================

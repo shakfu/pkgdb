@@ -9,6 +9,8 @@ wheels/
 *.egg-info
 .*_cache
 .cache
+.coverage
+htmlcov/
 
 # Virtual environments
 .venv

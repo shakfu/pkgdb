@@ -55,6 +55,7 @@ pkgdb packages
 pkgdb import packages.json
 
 # Fetch latest stats from PyPI and store in database
+# (skips packages already fetched in the last 24 hours)
 pkgdb fetch
 
 # Display stats in terminal (includes trend sparklines and growth %)
@@ -99,6 +100,7 @@ pkgdb badge <package-name> --period month
 pkgdb badge <package-name> -o badge.svg
 
 # Fetch stats and generate report in one step
+# (skips packages already fetched in the last 24 hours)
 pkgdb update
 
 # Clean up orphaned stats (for packages no longer tracked)
@@ -199,7 +201,12 @@ The `package_stats` table stores:
 - `last_day`, `last_week`, `last_month`: Recent download counts
 - `total`: Total downloads (excluding mirrors)
 
-Stats are upserted per package per day, so running fetch multiple times on the same day updates rather than duplicates.
+The `fetch_attempts` table tracks API requests:
+- `package_name`: Package identifier (primary key)
+- `attempt_time`: ISO timestamp of last fetch attempt
+- `success`: Whether the fetch succeeded (1) or failed (0)
+
+Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period.
 
 ## Files
 

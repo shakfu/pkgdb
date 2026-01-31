@@ -5,7 +5,7 @@ Reads published packages from packages.yml, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.1.6"
+__version__ = "0.1.7"
 
 # Re-export public API from submodules
 from .api import (
@@ -42,9 +42,11 @@ from .db import (
     get_latest_stats,
     get_package_history,
     get_packages,
+    get_packages_needing_update,
     get_stats_with_growth,
     init_db,
     prune_old_stats,
+    record_fetch_attempt,
     remove_package,
     store_stats,
     store_stats_batch,
@@ -120,9 +122,11 @@ __all__ = [
     "get_latest_stats",
     "get_package_history",
     "get_packages",
+    "get_packages_needing_update",
     "get_stats_with_growth",
     "init_db",
     "prune_old_stats",
+    "record_fetch_attempt",
     "remove_package",
     "store_stats",
     "store_stats_batch",

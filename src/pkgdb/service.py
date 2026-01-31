@@ -21,8 +21,10 @@ from .db import (
     get_latest_stats,
     get_package_history,
     get_packages,
+    get_packages_needing_update,
     get_stats_with_growth,
     prune_old_stats,
+    record_fetch_attempt,
     remove_package,
     store_stats,
 )
@@ -47,6 +49,7 @@ class FetchResult:
 
     success: int
     failed: int
+    skipped: int
     results: dict[str, PackageStats | None]
 
 
@@ -265,6 +268,7 @@ class PackageStatsService:
     ) -> FetchResult:
         """Fetch and store stats for all tracked packages.
 
+        Skips packages that have been attempted within the last 24 hours.
         Uses batch commits for better performance when storing multiple packages.
 
         Args:
@@ -272,35 +276,45 @@ class PackageStatsService:
                 (current_index, total_count, package_name, stats_or_none).
 
         Returns:
-            FetchResult with success/failure counts and results.
+            FetchResult with success/failure/skipped counts and results.
         """
         with get_db(self.db_path) as conn:
-            packages = get_packages(conn)
-            if not packages:
-                return FetchResult(success=0, failed=0, results={})
+            all_packages = get_packages(conn)
+            if not all_packages:
+                return FetchResult(success=0, failed=0, skipped=0, results={})
+
+            packages_to_fetch = get_packages_needing_update(conn)
+            skipped = len(all_packages) - len(packages_to_fetch)
+
+            if not packages_to_fetch:
+                return FetchResult(success=0, failed=0, skipped=skipped, results={})
 
             results: dict[str, PackageStats | None] = {}
             success = 0
             failed = 0
 
-            for i, package in enumerate(packages, 1):
+            for i, package in enumerate(packages_to_fetch, 1):
                 stats = fetch_package_stats(package)
                 results[package] = stats
 
                 if stats:
                     # Use commit=False for batch operation
                     store_stats(conn, package, stats, commit=False)
+                    record_fetch_attempt(conn, package, success=True, commit=False)
                     success += 1
                 else:
+                    record_fetch_attempt(conn, package, success=False, commit=False)
                     failed += 1
 
                 if progress_callback:
-                    progress_callback(i, len(packages), package, stats)
+                    progress_callback(i, len(packages_to_fetch), package, stats)
 
-            # Single commit for all successful stores
+            # Single commit for all stores and attempts
             conn.commit()
 
-            return FetchResult(success=success, failed=failed, results=results)
+            return FetchResult(
+                success=success, failed=failed, skipped=skipped, results=results
+            )
 
     def fetch_package_details(self, package: str) -> PackageDetails:
         """Fetch detailed statistics for a single package.

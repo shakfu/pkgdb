@@ -98,7 +98,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         return
 
     total = len(packages)
-    logger.info("Fetching stats for %d tracked packages...", total)
+    logger.info("Checking %d tracked packages...", total)
 
     def on_progress(
         current: int, total: int, package: str, stats: PackageStats | None
@@ -114,7 +114,16 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             )
 
     result = service.fetch_all_stats(progress_callback=on_progress)
-    logger.info("Done. (%d succeeded, %d failed)", result.success, result.failed)
+
+    if result.skipped > 0:
+        logger.info(
+            "Skipped %d packages (already fetched in last 24 hours).", result.skipped
+        )
+
+    if result.success > 0 or result.failed > 0:
+        logger.info("Done. (%d succeeded, %d failed)", result.success, result.failed)
+    elif result.skipped == total:
+        logger.info("All packages already up to date.")
 
 
 def cmd_report(args: argparse.Namespace) -> None:

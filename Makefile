@@ -1,6 +1,6 @@
 NAME := pkgdb
 
-.PHONY: all test sync update fetch report lint typecheck format qa \
+.PHONY: all test coverage sync update fetch report lint typecheck format qa \
 		build wheel sdist check publish publish-test clean reset
 
 all: test
@@ -10,6 +10,9 @@ sync:
 
 test: sync
 	@uv run pytest
+
+coverage: sync
+	@uv run pytest --cov=pkgdb --cov-report=term-missing --cov-report=html
 
 update:
 	@uv run $(NAME) update
@@ -55,4 +58,4 @@ clean:
 	@rm -f report.html
 
 reset: clean
-	@rm -rf build dist .venv *.egg-info src/*.egg-info
+	@rm -rf build dist .venv *.egg-info src/*.egg-info htmlcov .coverage

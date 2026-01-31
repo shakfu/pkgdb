@@ -62,6 +62,13 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS fetch_attempts (
+            package_name TEXT PRIMARY KEY,
+            attempt_time TEXT NOT NULL,
+            success INTEGER NOT NULL
+        )
+    """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_package_name
         ON package_stats(package_name)
     """)
@@ -106,6 +113,61 @@ def get_packages(conn: sqlite3.Connection) -> list[str]:
     """Get list of tracked package names from the database."""
     cursor = conn.execute("SELECT package_name FROM packages ORDER BY package_name")
     return [row["package_name"] for row in cursor.fetchall()]
+
+
+def record_fetch_attempt(
+    conn: sqlite3.Connection,
+    package_name: str,
+    success: bool,
+    commit: bool = True,
+) -> None:
+    """Record a fetch attempt for a package.
+
+    Args:
+        conn: Database connection.
+        package_name: Name of the package.
+        success: Whether the fetch was successful.
+        commit: If True, commit the transaction.
+    """
+    attempt_time = datetime.now().isoformat()
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO fetch_attempts (package_name, attempt_time, success)
+        VALUES (?, ?, ?)
+        """,
+        (package_name, attempt_time, 1 if success else 0),
+    )
+    if commit:
+        conn.commit()
+
+
+def get_packages_needing_update(conn: sqlite3.Connection, hours: int = 24) -> list[str]:
+    """Get packages that haven't been fetched in the last N hours.
+
+    Args:
+        conn: Database connection.
+        hours: Number of hours since last attempt to consider stale.
+
+    Returns:
+        List of package names that need updating.
+    """
+    # Get all tracked packages
+    all_packages = get_packages(conn)
+    if not all_packages:
+        return []
+
+    # Get packages with recent attempts
+    cursor = conn.execute(
+        """
+        SELECT package_name FROM fetch_attempts
+        WHERE datetime(attempt_time) > datetime('now', ?)
+        """,
+        (f"-{hours} hours",),
+    )
+    recent_attempts = {row["package_name"] for row in cursor.fetchall()}
+
+    # Return packages without recent attempts
+    return [p for p in all_packages if p not in recent_attempts]
 
 
 def store_stats(

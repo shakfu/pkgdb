@@ -562,9 +562,15 @@ def generate_html_report(
         key=lambda x: x[1],
         reverse=True,
     )
+    day_data = sorted(
+        [(s["package_name"], s["last_day"] or 0) for s in stats],
+        key=lambda x: x[1],
+        reverse=True,
+    )
 
     totals_chart = _make_svg_bar_chart(totals_data, "Total Downloads", "totals-chart")
     month_chart = _make_svg_bar_chart(month_data, "Last Month", "month-chart")
+    day_chart = _make_svg_bar_chart(day_data, "Last Day", "day-chart")
     time_series_chart = (
         _make_multi_line_chart(history, "time-series-chart") if history else ""
     )
@@ -614,6 +620,11 @@ def generate_html_report(
     <div class="chart-container">
         <h2>Recent Downloads (Last Month)</h2>
         {month_chart}
+    </div>
+
+    <div class="chart-container">
+        <h2>Recent Downloads (Last Day)</h2>
+        {day_chart}
     </div>
 
     {f'<div class="chart-container"><h2>Downloads Over Time (Top 5)</h2>{time_series_chart}</div>' if time_series_chart else ""}
