@@ -313,7 +313,7 @@ class TestPackageManagement:
 
 
 class TestLoadPackages:
-    """Tests for loading packages from YAML."""
+    """Tests for loading packages from JSON."""
 
     def test_load_packages_returns_list(self, temp_packages_file):
         """load_packages should return a list of package names."""
@@ -524,6 +524,38 @@ class TestGrowthCalculation:
         """calculate_growth should return None when values are None."""
         assert calculate_growth(None, 100) is None
         assert calculate_growth(100, None) is None
+
+    def test_get_stats_with_growth_uses_weekly_column(self, temp_db):
+        """week_growth should be computed from last_week, not last_month."""
+        from datetime import datetime, timedelta
+        from pkgdb.db import get_stats_with_growth
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "test-pkg")
+
+        today = datetime.now()
+        eight_days_ago = (today - timedelta(days=8)).strftime("%Y-%m-%d")
+        today_str = today.strftime("%Y-%m-%d")
+
+        # Insert stats directly with deliberately different weekly vs monthly values
+        conn.execute(
+            "INSERT INTO package_stats (package_name, fetch_date, last_day, last_week, last_month, total) VALUES (?, ?, ?, ?, ?, ?)",
+            ("test-pkg", eight_days_ago, 10, 100, 1000, 5000),
+        )
+        conn.execute(
+            "INSERT INTO package_stats (package_name, fetch_date, last_day, last_week, last_month, total) VALUES (?, ?, ?, ?, ?, ?)",
+            ("test-pkg", today_str, 15, 200, 1500, 6000),
+        )
+        conn.commit()
+
+        stats = get_stats_with_growth(conn)
+        pkg_stat = next(s for s in stats if s["package_name"] == "test-pkg")
+
+        # week_growth should compare last_week values: (200-100)/100 = 100%
+        # If it wrongly used last_month: (1500-1000)/1000 = 50%
+        assert pkg_stat["week_growth"] == 100.0
+        conn.close()
 
 
 class TestSparkline:
@@ -797,6 +829,60 @@ class TestHTMLReportGeneration:
         finally:
             Path(output_path).unlink(missing_ok=True)
 
+    def test_generate_html_report_includes_growth_columns(self):
+        """generate_html_report should include growth columns when stats have growth data."""
+        stats = [
+            {
+                "package_name": "test-pkg",
+                "total": 1000,
+                "last_month": 300,
+                "last_week": 70,
+                "last_day": 10,
+                "week_growth": 25.0,
+                "month_growth": -10.5,
+            }
+        ]
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False
+        ) as f:
+            output_path = f.name
+
+        try:
+            generate_html_report(stats, output_path)
+            content = Path(output_path).read_text()
+            assert "Week Growth" in content
+            assert "Month Growth" in content
+            assert "+25.0%" in content
+            assert "-10.5%" in content
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
+    def test_generate_html_report_omits_growth_when_absent(self):
+        """generate_html_report should not show growth columns when stats lack growth data."""
+        stats = [
+            {
+                "package_name": "test-pkg",
+                "total": 1000,
+                "last_month": 300,
+                "last_week": 70,
+                "last_day": 10,
+            }
+        ]
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".html", delete=False
+        ) as f:
+            output_path = f.name
+
+        try:
+            generate_html_report(stats, output_path)
+            content = Path(output_path).read_text()
+            assert "Week Growth" not in content
+            assert "Month Growth" not in content
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
 
 class TestCLI:
     """Tests for CLI argument parsing and commands."""
@@ -899,7 +985,7 @@ class TestCLI:
         assert "Tracking 2 packages" in caplog.text
 
     def test_main_import_command(self, temp_db, temp_packages_file, caplog):
-        """import command should import packages from YAML file."""
+        """import command should import packages from file."""
         conn = get_db_connection(temp_db)
         init_db(conn)
         conn.close()
@@ -3119,12 +3205,332 @@ class TestFetchAttemptTracking:
         assert result1.failed == 1
         assert result1.success == 0
 
-        # Second fetch should skip the failed package too (within 24 hours)
+        # Second fetch should retry the failed package (not skip it)
         with patch("pkgdb.api.pypistats.recent", side_effect=ValueError("API error")):
             result2 = service.fetch_all_stats()
 
+        assert result2.failed == 1
+        assert result2.skipped == 0
+
+    def test_get_packages_needing_update_retries_after_failure(self, temp_db):
+        """get_packages_needing_update should retry packages whose last attempt failed."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+
+        # Record a recent failed attempt
+        record_fetch_attempt(conn, "pkg-a", success=False)
+
+        packages = get_packages_needing_update(conn)
+        assert "pkg-a" in packages
+        conn.close()
+
+    def test_get_packages_needing_update_skips_recent_success(self, temp_db):
+        """get_packages_needing_update should skip packages with recent successful fetch."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+
+        # Record a recent successful attempt
+        record_fetch_attempt(conn, "pkg-a", success=True)
+
+        packages = get_packages_needing_update(conn)
+        assert "pkg-a" not in packages
+        conn.close()
+
+
+class TestNextUpdateTime:
+    """Tests for next update time calculation."""
+
+    def test_get_next_update_seconds_with_recent_success(self, temp_db):
+        """get_next_update_seconds should return remaining seconds when packages are throttled."""
+        from pkgdb import get_next_update_seconds
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        record_fetch_attempt(conn, "pkg-a", success=True)
+
+        seconds = get_next_update_seconds(conn)
+        # Should be close to 24 hours (86400s), with some tolerance
+        assert seconds is not None
+        assert 86000 < seconds <= 86400
+        conn.close()
+
+    def test_get_next_update_seconds_no_attempts(self, temp_db):
+        """get_next_update_seconds should return None when no packages are throttled."""
+        from pkgdb import get_next_update_seconds
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+
+        seconds = get_next_update_seconds(conn)
+        assert seconds is None
+        conn.close()
+
+    def test_get_next_update_seconds_only_failed(self, temp_db):
+        """get_next_update_seconds should return None when only failed attempts exist."""
+        from pkgdb import get_next_update_seconds
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        record_fetch_attempt(conn, "pkg-a", success=False)
+
+        seconds = get_next_update_seconds(conn)
+        assert seconds is None
+        conn.close()
+
+    def test_fetch_result_includes_next_update(self, temp_db):
+        """FetchResult should include next_update_seconds when all packages are skipped."""
+        service = PackageStatsService(temp_db)
+        service.add_package("pkg-a", verify=False)
+
+        # First fetch succeeds
+        recent = json.dumps({"data": {"last_day": 10, "last_week": 70, "last_month": 300}})
+        overall = json.dumps({"data": [{"category": "without_mirrors", "downloads": 5000}]})
+        with patch("pkgdb.api.pypistats.recent", return_value=recent):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall):
+                result1 = service.fetch_all_stats()
+
+        assert result1.success == 1
+
+        # Second fetch - all skipped, should include next_update_seconds
+        result2 = service.fetch_all_stats()
         assert result2.skipped == 1
-        assert result2.failed == 0
+        assert result2.next_update_seconds is not None
+        assert result2.next_update_seconds > 0
+
+
+# =============================================================================
+# Environment Stats Caching Tests
+# =============================================================================
+
+
+class TestEnvStatsCache:
+    """Tests for caching Python version and OS distribution stats in SQLite."""
+
+    def test_store_and_retrieve_python_versions(self, temp_db):
+        """store_env_stats should persist Python version data retrievable by get_cached_python_versions."""
+        from pkgdb import store_env_stats, get_cached_python_versions
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "test-pkg")
+
+        py_versions = [
+            {"category": "3.12", "downloads": 500},
+            {"category": "3.11", "downloads": 300},
+            {"category": "3.10", "downloads": 100},
+        ]
+        store_env_stats(conn, "test-pkg", python_versions=py_versions)
+
+        cached = get_cached_python_versions(conn, "test-pkg")
+        assert cached is not None
+        assert len(cached) == 3
+        # Should be sorted by downloads descending
+        assert cached[0]["category"] == "3.12"
+        assert cached[0]["downloads"] == 500
+        assert cached[2]["category"] == "3.10"
+        conn.close()
+
+    def test_store_and_retrieve_os_stats(self, temp_db):
+        """store_env_stats should persist OS data retrievable by get_cached_os_stats."""
+        from pkgdb import store_env_stats, get_cached_os_stats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "test-pkg")
+
+        os_data = [
+            {"category": "Linux", "downloads": 800},
+            {"category": "Windows", "downloads": 400},
+            {"category": "Darwin", "downloads": 200},
+        ]
+        store_env_stats(conn, "test-pkg", os_data=os_data)
+
+        cached = get_cached_os_stats(conn, "test-pkg")
+        assert cached is not None
+        assert len(cached) == 3
+        assert cached[0]["category"] == "Linux"
+        assert cached[0]["downloads"] == 800
+        conn.close()
+
+    def test_cached_returns_none_when_empty(self, temp_db):
+        """get_cached_* should return None when no data exists."""
+        from pkgdb import get_cached_python_versions, get_cached_os_stats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        assert get_cached_python_versions(conn, "nonexistent") is None
+        assert get_cached_os_stats(conn, "nonexistent") is None
+        conn.close()
+
+    def test_store_env_stats_none_inputs(self, temp_db):
+        """store_env_stats should handle None inputs gracefully."""
+        from pkgdb import store_env_stats, get_cached_python_versions, get_cached_os_stats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "test-pkg")
+
+        store_env_stats(conn, "test-pkg", python_versions=None, os_data=None)
+
+        assert get_cached_python_versions(conn, "test-pkg") is None
+        assert get_cached_os_stats(conn, "test-pkg") is None
+        conn.close()
+
+    def test_get_cached_env_summary_aggregates(self, temp_db):
+        """get_cached_env_summary should aggregate across all packages."""
+        from pkgdb import store_env_stats, get_cached_env_summary
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        add_package(conn, "pkg-b")
+
+        store_env_stats(conn, "pkg-a",
+            python_versions=[{"category": "3.12", "downloads": 100}],
+            os_data=[{"category": "Linux", "downloads": 200}],
+        )
+        store_env_stats(conn, "pkg-b",
+            python_versions=[{"category": "3.12", "downloads": 50}, {"category": "3.11", "downloads": 30}],
+            os_data=[{"category": "Linux", "downloads": 100}, {"category": "Windows", "downloads": 80}],
+        )
+
+        summary = get_cached_env_summary(conn)
+        assert summary is not None
+
+        py_dict = dict(summary["python_versions"])
+        assert py_dict["3.12"] == 150
+        assert py_dict["3.11"] == 30
+
+        os_dict = dict(summary["os_distribution"])
+        assert os_dict["Linux"] == 300
+        assert os_dict["Windows"] == 80
+        conn.close()
+
+    def test_get_cached_env_summary_returns_none_when_empty(self, temp_db):
+        """get_cached_env_summary should return None when no cached data exists."""
+        from pkgdb import get_cached_env_summary
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        assert get_cached_env_summary(conn) is None
+        conn.close()
+
+    def test_cleanup_orphaned_stats_cleans_env_tables(self, temp_db):
+        """cleanup_orphaned_stats should also remove orphaned env stats."""
+        from pkgdb import store_env_stats, get_cached_python_versions, cleanup_orphaned_stats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "tracked-pkg")
+
+        store_env_stats(conn, "tracked-pkg",
+            python_versions=[{"category": "3.12", "downloads": 100}])
+        # Insert env data for a package that isn't tracked
+        conn.execute(
+            "INSERT INTO python_version_stats (package_name, fetch_date, category, downloads) VALUES (?, ?, ?, ?)",
+            ("orphan-pkg", "2026-01-01", "3.12", 50),
+        )
+        conn.commit()
+
+        cleanup_orphaned_stats(conn)
+
+        assert get_cached_python_versions(conn, "tracked-pkg") is not None
+        assert get_cached_python_versions(conn, "orphan-pkg") is None
+        conn.close()
+
+    def test_prune_old_stats_prunes_env_tables(self, temp_db):
+        """prune_old_stats should also remove old env stats."""
+        from pkgdb import store_env_stats, get_cached_python_versions, prune_old_stats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "test-pkg")
+
+        # Insert old env data
+        conn.execute(
+            "INSERT INTO python_version_stats (package_name, fetch_date, category, downloads) VALUES (?, ?, ?, ?)",
+            ("test-pkg", "2020-01-01", "3.8", 100),
+        )
+        # Insert recent env data
+        store_env_stats(conn, "test-pkg",
+            python_versions=[{"category": "3.12", "downloads": 200}])
+
+        prune_old_stats(conn, days=30)
+
+        cached = get_cached_python_versions(conn, "test-pkg")
+        assert cached is not None
+        assert len(cached) == 1
+        assert cached[0]["category"] == "3.12"
+        conn.close()
+
+    def test_fetch_all_stats_stores_env_data(self, temp_db):
+        """fetch_all_stats should store env stats alongside download stats."""
+        from pkgdb import get_cached_python_versions, get_cached_os_stats
+
+        service = PackageStatsService(temp_db)
+        service.add_package("test-pkg", verify=False)
+
+        recent = json.dumps({"data": {"last_day": 10, "last_week": 70, "last_month": 300}})
+        overall = json.dumps({"data": [{"category": "without_mirrors", "downloads": 5000}]})
+        py_response = json.dumps({"data": [{"category": "3.12", "downloads": 100}]})
+        os_response = json.dumps({"data": [{"category": "Linux", "downloads": 200}]})
+
+        with patch("pkgdb.api.pypistats.recent", return_value=recent):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall):
+                with patch("pkgdb.api.pypistats.python_minor", return_value=py_response):
+                    with patch("pkgdb.api.pypistats.system", return_value=os_response):
+                        result = service.fetch_all_stats()
+
+        assert result.success == 1
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        py = get_cached_python_versions(conn, "test-pkg")
+        os_data = get_cached_os_stats(conn, "test-pkg")
+        assert py is not None
+        assert py[0]["category"] == "3.12"
+        assert os_data is not None
+        assert os_data[0]["category"] == "Linux"
+        conn.close()
+
+    def test_package_report_uses_cached_env(self, temp_db):
+        """generate_package_report should use cached env data instead of live API."""
+        from pkgdb import store_env_stats
+
+        service = PackageStatsService(temp_db)
+        service.add_package("test-pkg", verify=False)
+
+        # Store download stats and env data
+        recent = json.dumps({"data": {"last_day": 10, "last_week": 70, "last_month": 300}})
+        overall = json.dumps({"data": [{"category": "without_mirrors", "downloads": 5000}]})
+        py_response = json.dumps({"data": [{"category": "3.12", "downloads": 100}]})
+        os_response = json.dumps({"data": [{"category": "Linux", "downloads": 200}]})
+
+        with patch("pkgdb.api.pypistats.recent", return_value=recent):
+            with patch("pkgdb.api.pypistats.overall", return_value=overall):
+                with patch("pkgdb.api.pypistats.python_minor", return_value=py_response):
+                    with patch("pkgdb.api.pypistats.system", return_value=os_response):
+                        service.fetch_all_stats()
+
+        # Generate report -- should NOT call python_minor or system APIs
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            output = f.name
+
+        with patch("pkgdb.api.pypistats.python_minor") as mock_py, \
+             patch("pkgdb.api.pypistats.system") as mock_os:
+            service.generate_package_report("test-pkg", output)
+            mock_py.assert_not_called()
+            mock_os.assert_not_called()
+
+        os.unlink(output)
 
 
 # =============================================================================

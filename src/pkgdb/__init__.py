@@ -1,11 +1,11 @@
 """
 pkgdb - Track PyPI package download statistics.
 
-Reads published packages from packages.yml, fetches download statistics
+Reads published packages from packages.json, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 
 # Re-export public API from submodules
 from .api import (
@@ -35,6 +35,9 @@ from .db import (
     add_package,
     cleanup_orphaned_stats,
     get_all_history,
+    get_cached_env_summary,
+    get_cached_os_stats,
+    get_cached_python_versions,
     get_config_dir,
     get_database_stats,
     get_db,
@@ -42,12 +45,14 @@ from .db import (
     get_latest_stats,
     get_package_history,
     get_packages,
+    get_next_update_seconds,
     get_packages_needing_update,
     get_stats_with_growth,
     init_db,
     prune_old_stats,
     record_fetch_attempt,
     remove_package,
+    store_env_stats,
     store_stats,
     store_stats_batch,
 )
@@ -115,6 +120,9 @@ __all__ = [
     "add_package",
     "cleanup_orphaned_stats",
     "get_all_history",
+    "get_cached_env_summary",
+    "get_cached_os_stats",
+    "get_cached_python_versions",
     "get_config_dir",
     "get_database_stats",
     "get_db",
@@ -122,12 +130,14 @@ __all__ = [
     "get_latest_stats",
     "get_package_history",
     "get_packages",
+    "get_next_update_seconds",
     "get_packages_needing_update",
     "get_stats_with_growth",
     "init_db",
     "prune_old_stats",
     "record_fetch_attempt",
     "remove_package",
+    "store_env_stats",
     "store_stats",
     "store_stats_batch",
     # Export

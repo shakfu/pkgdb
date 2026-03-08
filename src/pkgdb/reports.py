@@ -535,6 +535,23 @@ def _build_env_charts(
 # -----------------------------------------------------------------------------
 
 
+def _format_growth(value: float | None) -> str:
+    """Format a growth percentage for HTML display with color and arrow."""
+    if value is None:
+        return '<span style="color: #999">--</span>'
+    sign = "+" if value > 0 else ""
+    if value > 0:
+        color = "#2e7d32"
+        arrow = "&#9650;"  # up triangle
+    elif value < 0:
+        color = "#c62828"
+        arrow = "&#9660;"  # down triangle
+    else:
+        color = "#999"
+        arrow = ""
+    return f'<span style="color: {color}">{arrow} {sign}{value:.1f}%</span>'
+
+
 def generate_html_report(
     stats: list[dict[str, Any]],
     output_file: str,
@@ -597,8 +614,17 @@ def generate_html_report(
 """
 
     # Build stats table rows
+    has_growth = any("week_growth" in s for s in stats)
     table_rows = ""
     for i, s in enumerate(stats, 1):
+        growth_cells = ""
+        if has_growth:
+            wg = s.get("week_growth")
+            mg = s.get("month_growth")
+            growth_cells = (
+                f'                <td class="number">{_format_growth(wg)}</td>\n'
+                f'                <td class="number">{_format_growth(mg)}</td>\n'
+            )
         table_rows += f"""            <tr>
                 <td>{i}</td>
                 <td><a href="https://pypi.org/project/{s["package_name"]}/">{s["package_name"]}</a></td>
@@ -606,7 +632,7 @@ def generate_html_report(
                 <td class="number">{s["last_month"] or 0:,}</td>
                 <td class="number">{s["last_week"] or 0:,}</td>
                 <td class="number">{s["last_day"] or 0:,}</td>
-            </tr>
+{growth_cells}            </tr>
 """
 
     # Build body content
@@ -641,6 +667,7 @@ def generate_html_report(
                 <th class="number">Last Month</th>
                 <th class="number">Last Week</th>
                 <th class="number">Last Day</th>
+                {"<th class=\"number\">Week Growth</th><th class=\"number\">Month Growth</th>" if has_growth else ""}
             </tr>
         </thead>
         <tbody>
@@ -660,14 +687,17 @@ def generate_package_html_report(
     output_file: str,
     stats: PackageStats | None = None,
     history: list[dict[str, Any]] | None = None,
+    python_versions: list[CategoryDownloads] | None = None,
+    os_stats: list[CategoryDownloads] | None = None,
 ) -> None:
     """Generate a detailed HTML report for a single package.
 
     Includes download stats, Python version distribution, and OS breakdown.
+    Uses cached env data if provided, otherwise fetches live from PyPI.
     """
     from .api import fetch_package_stats
 
-    logger.info("Fetching detailed stats for %s...", package)
+    logger.info("Generating report for %s...", package)
 
     # Fetch fresh stats from API if not provided
     if stats is None:
@@ -677,10 +707,12 @@ def generate_package_html_report(
         logger.warning("Could not fetch stats for %s", package)
         return
 
-    # Fetch environment data and build charts
-    py_versions = fetch_python_versions(package)
-    os_stats = fetch_os_stats(package)
-    py_version_chart, os_chart = _build_env_charts(py_versions, os_stats, size=220)
+    # Use cached env data if provided, otherwise fetch live
+    if python_versions is None:
+        python_versions = fetch_python_versions(package)
+    if os_stats is None:
+        os_stats = fetch_os_stats(package)
+    py_version_chart, os_chart = _build_env_charts(python_versions, os_stats, size=220)
 
     # Build history chart
     history_chart = ""

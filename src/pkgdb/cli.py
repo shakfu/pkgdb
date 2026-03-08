@@ -66,7 +66,7 @@ def load_packages_from_file(file_path: str) -> list[str]:
 def import_packages_from_file(conn: Any, file_path: str) -> tuple[int, int]:
     """Import packages from a file into the database.
 
-    Supports YAML, JSON, and plain text formats.
+    Supports JSON and plain text formats.
     Returns tuple of (added_count, skipped_count).
 
     Note: This function is kept for backward compatibility.
@@ -93,7 +93,7 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if not packages:
         logger.warning("No packages are being tracked.")
         logger.info(
-            "Add packages with 'pkgdb add <name>' or import from YAML with 'pkgdb import'."
+            "Add packages with 'pkgdb add <name>' or import from a file with 'pkgdb import'."
         )
         return
 
@@ -123,7 +123,21 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if result.success > 0 or result.failed > 0:
         logger.info("Done. (%d succeeded, %d failed)", result.success, result.failed)
     elif result.skipped == total:
-        logger.info("All packages already up to date.")
+        if result.next_update_seconds is not None and result.next_update_seconds > 0:
+            hours = int(result.next_update_seconds // 3600)
+            minutes = int((result.next_update_seconds % 3600) // 60)
+            if hours > 0:
+                logger.info(
+                    "All packages up to date. Next update available in %dh %dm.",
+                    hours, minutes,
+                )
+            else:
+                logger.info(
+                    "All packages up to date. Next update available in %dm.",
+                    max(1, minutes),
+                )
+        else:
+            logger.info("All packages already up to date.")
 
 
 def cmd_report(args: argparse.Namespace) -> None:
@@ -151,8 +165,6 @@ def cmd_report(args: argparse.Namespace) -> None:
 def cmd_update(args: argparse.Namespace) -> None:
     """Sync command: fetch stats then generate report."""
     cmd_fetch(args)
-    if not hasattr(args, "env"):
-        args.env = False
     cmd_report(args)
 
 
@@ -301,7 +313,7 @@ def cmd_remove(args: argparse.Namespace) -> None:
 
 
 def cmd_import(args: argparse.Namespace) -> None:
-    """Import command: import packages from file (YAML, JSON, or text)."""
+    """Import command: import packages from file (JSON or plain text)."""
     service = PackageStatsService(args.database)
     verify = not getattr(args, "no_verify", False)
     try:
@@ -594,7 +606,7 @@ def create_parser() -> argparse.ArgumentParser:
         "file",
         nargs="?",
         default=DEFAULT_PACKAGES_FILE,
-        help=f"File to import from - supports .yml, .json, or plain text (default: {DEFAULT_PACKAGES_FILE})",
+        help=f"File to import from - supports .json or plain text (default: {DEFAULT_PACKAGES_FILE})",
     )
     import_parser.add_argument(
         "--no-verify",
@@ -752,6 +764,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--output",
         default=DEFAULT_REPORT_FILE,
         help=f"Output HTML file (default: {DEFAULT_REPORT_FILE})",
+    )
+    update_parser.add_argument(
+        "-e",
+        "--env",
+        action="store_true",
+        help="Include environment summary (Python versions, OS) in report",
     )
     update_parser.add_argument(
         "--no-browser",

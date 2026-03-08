@@ -21,7 +21,12 @@ from .db import (
     get_latest_stats,
     get_package_history,
     get_packages,
+    get_cached_env_summary,
+    get_cached_os_stats,
+    get_cached_python_versions,
+    get_next_update_seconds,
     get_packages_needing_update,
+    store_env_stats,
     get_stats_with_growth,
     prune_old_stats,
     record_fetch_attempt,
@@ -51,6 +56,7 @@ class FetchResult:
     failed: int
     skipped: int
     results: dict[str, PackageStats | None]
+    next_update_seconds: float | None = None
 
 
 @dataclass
@@ -163,7 +169,7 @@ class PackageStatsService:
         """Import packages from a file.
 
         Args:
-            file_path: Path to file (YAML, JSON, or plain text).
+            file_path: Path to file (JSON or plain text).
             verify: If True, verify each package exists on PyPI before adding.
 
         Returns:
@@ -287,7 +293,10 @@ class PackageStatsService:
             skipped = len(all_packages) - len(packages_to_fetch)
 
             if not packages_to_fetch:
-                return FetchResult(success=0, failed=0, skipped=skipped, results={})
+                return FetchResult(
+                    success=0, failed=0, skipped=skipped, results={},
+                    next_update_seconds=get_next_update_seconds(conn),
+                )
 
             results: dict[str, PackageStats | None] = {}
             success = 0
@@ -300,6 +309,11 @@ class PackageStatsService:
                 if stats:
                     # Use commit=False for batch operation
                     store_stats(conn, package, stats, commit=False)
+                    py_versions = fetch_python_versions(package)
+                    os_data = fetch_os_stats(package)
+                    store_env_stats(
+                        conn, package, py_versions, os_data, commit=False
+                    )
                     record_fetch_attempt(conn, package, success=True, commit=False)
                     success += 1
                 else:
@@ -406,16 +420,18 @@ class PackageStatsService:
             raise ValueError(error_msg)
 
         with get_db(self.db_path) as conn:
-            stats = get_latest_stats(conn)
+            stats = get_stats_with_growth(conn)
             if not stats:
                 return False
 
             all_history = get_all_history(conn, limit_per_package=30)
             packages = [s["package_name"] for s in stats]
 
-        env_summary = None
-        if include_env:
-            env_summary = aggregate_env_stats(packages)
+            env_summary = None
+            if include_env:
+                env_summary = get_cached_env_summary(conn)
+                if env_summary is None:
+                    env_summary = aggregate_env_stats(packages)
 
         generate_html_report(stats, output_file, all_history, packages, env_summary)
         return True
@@ -442,6 +458,8 @@ class PackageStatsService:
 
         with get_db(self.db_path) as conn:
             history = get_package_history(conn, package, limit=30)
+            py_versions = get_cached_python_versions(conn, package)
+            os_data = get_cached_os_stats(conn, package)
 
         # Find stats in history or fetch fresh
         pkg_stats: PackageStats | None = None
@@ -456,7 +474,8 @@ class PackageStatsService:
                 break
 
         generate_package_html_report(
-            package, output_file, stats=pkg_stats, history=history
+            package, output_file, stats=pkg_stats, history=history,
+            python_versions=py_versions, os_stats=os_data,
         )
         return True
 

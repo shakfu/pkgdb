@@ -2,11 +2,11 @@
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator
 
-from .types import PackageStats
+from .types import CategoryDownloads, PackageStats
 from .utils import calculate_growth
 
 
@@ -69,8 +69,36 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS python_version_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            fetch_date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            downloads INTEGER NOT NULL,
+            UNIQUE(package_name, fetch_date, category)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS os_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            fetch_date TEXT NOT NULL,
+            category TEXT NOT NULL,
+            downloads INTEGER NOT NULL,
+            UNIQUE(package_name, fetch_date, category)
+        )
+    """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_package_name
         ON package_stats(package_name)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pyver_package_name
+        ON python_version_stats(package_name)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_os_package_name
+        ON os_stats(package_name)
     """)
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_fetch_date
@@ -160,7 +188,7 @@ def get_packages_needing_update(conn: sqlite3.Connection, hours: int = 24) -> li
     cursor = conn.execute(
         """
         SELECT package_name FROM fetch_attempts
-        WHERE datetime(attempt_time) > datetime('now', ?)
+        WHERE datetime(attempt_time) > datetime('now', ?) AND success = 1
         """,
         (f"-{hours} hours",),
     )
@@ -168,6 +196,171 @@ def get_packages_needing_update(conn: sqlite3.Connection, hours: int = 24) -> li
 
     # Return packages without recent attempts
     return [p for p in all_packages if p not in recent_attempts]
+
+
+def get_next_update_seconds(conn: sqlite3.Connection, hours: int = 24) -> float | None:
+    """Get seconds until the next package becomes eligible for update.
+
+    Finds the oldest successful attempt within the cooldown window and computes
+    how many seconds remain until it expires.
+
+    Returns:
+        Seconds until the next package is eligible, or None if no packages are throttled.
+    """
+    cursor = conn.execute(
+        """
+        SELECT MIN(attempt_time) as earliest
+        FROM fetch_attempts
+        WHERE datetime(attempt_time) > datetime('now', ?) AND success = 1
+        """,
+        (f"-{hours} hours",),
+    )
+    row = cursor.fetchone()
+    if not row or not row["earliest"]:
+        return None
+
+    earliest = datetime.fromisoformat(row["earliest"])
+    expires_at = earliest + timedelta(hours=hours)
+    remaining = (expires_at - datetime.now()).total_seconds()
+    return max(0.0, remaining)
+
+
+def store_env_stats(
+    conn: sqlite3.Connection,
+    package_name: str,
+    python_versions: list[CategoryDownloads] | None = None,
+    os_data: list[CategoryDownloads] | None = None,
+    commit: bool = True,
+) -> None:
+    """Store environment stats (Python versions, OS distribution) in the database.
+
+    Args:
+        conn: Database connection.
+        package_name: Name of the package.
+        python_versions: Python version download breakdown, or None.
+        os_data: OS distribution download breakdown, or None.
+        commit: If True, commit the transaction.
+    """
+    fetch_date = datetime.now().strftime("%Y-%m-%d")
+    if python_versions:
+        for item in python_versions:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO python_version_stats
+                (package_name, fetch_date, category, downloads)
+                VALUES (?, ?, ?, ?)
+                """,
+                (package_name, fetch_date, item["category"], item["downloads"]),
+            )
+    if os_data:
+        for item in os_data:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO os_stats
+                (package_name, fetch_date, category, downloads)
+                VALUES (?, ?, ?, ?)
+                """,
+                (package_name, fetch_date, item["category"], item["downloads"]),
+            )
+    if commit:
+        conn.commit()
+
+
+def get_cached_python_versions(
+    conn: sqlite3.Connection, package_name: str
+) -> list[CategoryDownloads] | None:
+    """Get cached Python version stats for a package.
+
+    Returns the most recent fetch date's data, sorted by downloads descending.
+    Returns None if no cached data exists.
+    """
+    cursor = conn.execute(
+        """
+        SELECT category, downloads FROM python_version_stats
+        WHERE package_name = ? AND fetch_date = (
+            SELECT MAX(fetch_date) FROM python_version_stats WHERE package_name = ?
+        )
+        ORDER BY downloads DESC
+        """,
+        (package_name, package_name),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+    return [{"category": row["category"], "downloads": row["downloads"]} for row in rows]
+
+
+def get_cached_os_stats(
+    conn: sqlite3.Connection, package_name: str
+) -> list[CategoryDownloads] | None:
+    """Get cached OS distribution stats for a package.
+
+    Returns the most recent fetch date's data, sorted by downloads descending.
+    Returns None if no cached data exists.
+    """
+    cursor = conn.execute(
+        """
+        SELECT category, downloads FROM os_stats
+        WHERE package_name = ? AND fetch_date = (
+            SELECT MAX(fetch_date) FROM os_stats WHERE package_name = ?
+        )
+        ORDER BY downloads DESC
+        """,
+        (package_name, package_name),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+    return [{"category": row["category"], "downloads": row["downloads"]} for row in rows]
+
+
+def get_cached_env_summary(
+    conn: sqlite3.Connection,
+) -> dict[str, list[tuple[str, int]]] | None:
+    """Aggregate cached environment stats across all packages.
+
+    Returns dict with 'python_versions' and 'os_distribution' keys,
+    each mapping to a list of (category, total_downloads) tuples sorted descending.
+    Returns None if no cached data exists.
+    """
+    # Aggregate Python versions from most recent fetch per package
+    py_cursor = conn.execute(
+        """
+        SELECT pv.category, SUM(pv.downloads) as total
+        FROM python_version_stats pv
+        INNER JOIN (
+            SELECT package_name, MAX(fetch_date) as max_date
+            FROM python_version_stats GROUP BY package_name
+        ) latest ON pv.package_name = latest.package_name
+            AND pv.fetch_date = latest.max_date
+        GROUP BY pv.category
+        ORDER BY total DESC
+        """
+    )
+    py_rows = py_cursor.fetchall()
+
+    os_cursor = conn.execute(
+        """
+        SELECT os.category, SUM(os.downloads) as total
+        FROM os_stats os
+        INNER JOIN (
+            SELECT package_name, MAX(fetch_date) as max_date
+            FROM os_stats GROUP BY package_name
+        ) latest ON os.package_name = latest.package_name
+            AND os.fetch_date = latest.max_date
+        GROUP BY os.category
+        ORDER BY total DESC
+        """
+    )
+    os_rows = os_cursor.fetchall()
+
+    if not py_rows and not os_rows:
+        return None
+
+    return {
+        "python_versions": [(row["category"], row["total"]) for row in py_rows],
+        "os_distribution": [(row["category"], row["total"]) for row in os_rows],
+    }
 
 
 def store_stats(
@@ -335,7 +528,7 @@ def get_stats_with_growth(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
         # Calculate growth
         s["week_growth"] = calculate_growth(
-            s["last_month"], week_ago["last_month"] if week_ago else None
+            s["last_week"], week_ago["last_week"] if week_ago else None
         )
         s["month_growth"] = calculate_growth(
             s["total"], month_ago["total"] if month_ago else None
@@ -353,8 +546,17 @@ def cleanup_orphaned_stats(conn: sqlite3.Connection) -> int:
         DELETE FROM package_stats
         WHERE package_name NOT IN (SELECT package_name FROM packages)
     """)
+    deleted = cursor.rowcount
+    conn.execute("""
+        DELETE FROM python_version_stats
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
+    conn.execute("""
+        DELETE FROM os_stats
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
     conn.commit()
-    return cursor.rowcount
+    return deleted
 
 
 def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
@@ -374,8 +576,17 @@ def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
     """,
         (f"-{days} days",),
     )
+    deleted = cursor.rowcount
+    conn.execute(
+        "DELETE FROM python_version_stats WHERE fetch_date < date('now', ?)",
+        (f"-{days} days",),
+    )
+    conn.execute(
+        "DELETE FROM os_stats WHERE fetch_date < date('now', ?)",
+        (f"-{days} days",),
+    )
     conn.commit()
-    return cursor.rowcount
+    return deleted
 
 
 def get_database_stats(conn: sqlite3.Connection) -> dict[str, Any]:

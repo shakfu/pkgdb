@@ -103,6 +103,9 @@ pkgdb badge <package-name> -o badge.svg
 # (skips packages already fetched in the last 24 hours)
 pkgdb update
 
+# Fetch stats and generate report with environment summary
+pkgdb update -e
+
 # Clean up orphaned stats (for packages no longer tracked)
 pkgdb cleanup
 
@@ -181,7 +184,7 @@ Modular CLI application with the following commands:
 **Reporting:**
 - **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With package argument, generates detailed single-package report
 - **badge**: Generate shields.io-style SVG badge for a package
-- **update**: Run fetch then report in one step
+- **update**: Run fetch then report in one step (supports `-e` for environment summary)
 
 **Maintenance:**
 - **cleanup**: Remove orphaned stats and optionally prune old data
@@ -201,12 +204,18 @@ The `package_stats` table stores:
 - `last_day`, `last_week`, `last_month`: Recent download counts
 - `total`: Total downloads (excluding mirrors)
 
+The `python_version_stats` and `os_stats` tables cache environment data:
+- `package_name`: Package identifier
+- `fetch_date`: Date stats were fetched (YYYY-MM-DD)
+- `category`: Python version (e.g. "3.12") or OS name (e.g. "Linux")
+- `downloads`: Download count for that category
+
 The `fetch_attempts` table tracks API requests:
 - `package_name`: Package identifier (primary key)
 - `attempt_time`: ISO timestamp of last fetch attempt
 - `success`: Whether the fetch succeeded (1) or failed (0)
 
-Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period.
+Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period. Environment stats are cached alongside download stats, so reports can be generated offline.
 
 ## Files
 

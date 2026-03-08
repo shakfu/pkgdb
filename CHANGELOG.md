@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8]
+
+### Fixed
+
+- `get_stats_with_growth` now computes `week_growth` from `last_week` column instead of `last_month`
+- `get_packages_needing_update` now only filters on successful attempts, so transient API failures no longer block retries for 24 hours
+- License classifier in `pyproject.toml` corrected from "BSD License" to "MIT License" to match actual license
+- CLI "All packages already up to date" message now shows when the next update will be available (e.g. "Next update available in 23h 45m")
+
+### Added
+
+- Environment stats caching: Python version and OS distribution data now stored in SQLite during fetch
+  - New tables: `python_version_stats` and `os_stats`
+  - `pkgdb report <package>` uses cached env data instead of live API calls (offline-capable)
+  - `pkgdb report --env` reads cached aggregated env data (falls back to live API if no cache)
+  - Env stats are fetched alongside download stats in the same 24h fetch cycle
+- `-e/--env` flag on `pkgdb update` for parity with `pkgdb report` (fetch + env-enabled report in one step)
+- Growth indicators (week-over-week, month-over-month) in the HTML report table, with colored arrows for positive/negative trends
+- New functions: `store_env_stats()`, `get_cached_python_versions()`, `get_cached_os_stats()`, `get_cached_env_summary()`
+- `cleanup_orphaned_stats()` and `prune_old_stats()` now also clean env stats tables
+- `get_next_update_seconds()` function to compute seconds until the next package becomes eligible for update
+- `FetchResult.next_update_seconds` field for programmatic access to next update timing
+
+### Removed
+
+- Removed references to YAML support in docstrings and help text (YAML parsing was removed in v0.1.3; only JSON and plain text are supported)
+- Deleted legacy `packages.yml` (unused since v0.1.3)
+
 ## [0.1.7]
 
 ### Added
