@@ -129,7 +129,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
             if hours > 0:
                 logger.info(
                     "All packages up to date. Next update available in %dh %dm.",
-                    hours, minutes,
+                    hours,
+                    minutes,
                 )
             else:
                 logger.info(
@@ -578,9 +579,7 @@ def cmd_github(args: argparse.Namespace) -> None:
     failed = [r for r in results if not r.success]
 
     if sort_by == "stars":
-        successful.sort(
-            key=lambda r: r.stats.stars if r.stats else 0, reverse=True
-        )
+        successful.sort(key=lambda r: r.stats.stars if r.stats else 0, reverse=True)
     elif sort_by == "name":
         successful.sort(key=lambda r: r.package_name)
     elif sort_by == "activity":
@@ -595,13 +594,15 @@ def cmd_github(args: argparse.Namespace) -> None:
             s = r.stats
             if s is None:
                 continue
-            rows.append([
-                r.package_name,
-                f"{s.stars:,}",
-                f"{s.forks:,}",
-                s.activity_status,
-                s.language or "-",
-            ])
+            rows.append(
+                [
+                    r.package_name,
+                    f"{s.stars:,}",
+                    f"{s.forks:,}",
+                    s.activity_status,
+                    s.language or "-",
+                ]
+            )
 
         headers = ["Package", "Stars", "Forks", "Activity", "Language"]
         print(tabulate(rows, headers=headers, tablefmt="simple"))
@@ -615,9 +616,7 @@ def cmd_github(args: argparse.Namespace) -> None:
         for r in failed:
             logger.warning("  %s: %s", r.package_name, r.error)
 
-    logger.info(
-        "Done. (%d succeeded, %d failed)", len(successful), len(failed)
-    )
+    logger.info("Done. (%d succeeded, %d failed)", len(successful), len(failed))
 
 
 def cmd_version(args: argparse.Namespace) -> None:

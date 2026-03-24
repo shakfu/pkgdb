@@ -633,21 +633,23 @@ def generate_html_report(
         if has_github:
             gh = github_stats.get(s["package_name"]) if github_stats else None
             if gh:
-                repo_link = f'<a href="https://github.com/{gh.full_name}">{gh.full_name}</a>'
+                repo_link = (
+                    f'<a href="https://github.com/{gh.full_name}">{gh.full_name}</a>'
+                )
                 github_cells = (
                     f'                <td class="number">{gh.stars:,}</td>\n'
                     f'                <td class="number">{gh.forks:,}</td>\n'
-                    f'                <td>{gh.language or "-"}</td>\n'
-                    f'                <td>{gh.activity_status}</td>\n'
-                    f'                <td>{repo_link}</td>\n'
+                    f"                <td>{gh.language or '-'}</td>\n"
+                    f"                <td>{gh.activity_status}</td>\n"
+                    f"                <td>{repo_link}</td>\n"
                 )
             else:
                 github_cells = (
                     '                <td class="number">-</td>\n'
                     '                <td class="number">-</td>\n'
-                    '                <td>-</td>\n'
-                    '                <td>-</td>\n'
-                    '                <td>-</td>\n'
+                    "                <td>-</td>\n"
+                    "                <td>-</td>\n"
+                    "                <td>-</td>\n"
                 )
         table_rows += f"""            <tr>
                 <td>{i}</td>
@@ -662,12 +664,14 @@ def generate_html_report(
     # Build extra header columns
     growth_header = (
         '<th class="number">Week Growth</th><th class="number">Month Growth</th>'
-        if has_growth else ""
+        if has_growth
+        else ""
     )
     github_header = (
         '<th class="number">Stars</th><th class="number">Forks</th>'
-        '<th>Language</th><th>Activity</th><th>Repository</th>'
-        if has_github else ""
+        "<th>Language</th><th>Activity</th><th>Repository</th>"
+        if has_github
+        else ""
     )
 
     # Build body content

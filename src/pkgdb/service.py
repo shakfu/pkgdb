@@ -300,7 +300,10 @@ class PackageStatsService:
 
             if not packages_to_fetch:
                 return FetchResult(
-                    success=0, failed=0, skipped=skipped, results={},
+                    success=0,
+                    failed=0,
+                    skipped=skipped,
+                    results={},
                     next_update_seconds=get_next_update_seconds(conn),
                 )
 
@@ -317,9 +320,7 @@ class PackageStatsService:
                     store_stats(conn, package, stats, commit=False)
                     py_versions = fetch_python_versions(package)
                     os_data = fetch_os_stats(package)
-                    store_env_stats(
-                        conn, package, py_versions, os_data, commit=False
-                    )
+                    store_env_stats(conn, package, py_versions, os_data, commit=False)
                     record_fetch_attempt(conn, package, success=True, commit=False)
                     success += 1
                 else:
@@ -436,11 +437,9 @@ class PackageStatsService:
             all_history = get_all_history(conn, limit_per_package=30)
             packages = [s["package_name"] for s in stats]
 
-            env_summary = None
-            if include_env:
-                env_summary = get_cached_env_summary(conn)
-                if env_summary is None:
-                    env_summary = aggregate_env_stats(packages)
+            env_summary = get_cached_env_summary(conn) if include_env else None
+            if include_env and env_summary is None:
+                env_summary = aggregate_env_stats(packages)
 
             github_stats = None
             if include_github:
@@ -495,8 +494,12 @@ class PackageStatsService:
                 break
 
         generate_package_html_report(
-            package, output_file, stats=pkg_stats, history=history,
-            python_versions=py_versions, os_stats=os_data,
+            package,
+            output_file,
+            stats=pkg_stats,
+            history=history,
+            python_versions=py_versions,
+            os_stats=os_data,
         )
         return True
 
@@ -612,9 +615,7 @@ class PackageStatsService:
         results: list[RepoResult] = []
         with get_db(self.db_path) as conn:
             for pkg in pkg_list:
-                result = fetch_package_github_stats(
-                    pkg, conn=conn, use_cache=use_cache
-                )
+                result = fetch_package_github_stats(pkg, conn=conn, use_cache=use_cache)
                 results.append(result)
 
         return results

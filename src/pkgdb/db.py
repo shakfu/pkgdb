@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator
 
-from .types import CategoryDownloads, PackageStats
+from .types import CategoryDownloads, EnvSummary, PackageStats
 from .utils import calculate_growth
 
 
@@ -295,7 +295,9 @@ def get_cached_python_versions(
     rows = cursor.fetchall()
     if not rows:
         return None
-    return [{"category": row["category"], "downloads": row["downloads"]} for row in rows]
+    return [
+        {"category": row["category"], "downloads": row["downloads"]} for row in rows
+    ]
 
 
 def get_cached_os_stats(
@@ -319,12 +321,14 @@ def get_cached_os_stats(
     rows = cursor.fetchall()
     if not rows:
         return None
-    return [{"category": row["category"], "downloads": row["downloads"]} for row in rows]
+    return [
+        {"category": row["category"], "downloads": row["downloads"]} for row in rows
+    ]
 
 
 def get_cached_env_summary(
     conn: sqlite3.Connection,
-) -> dict[str, list[tuple[str, int]]] | None:
+) -> EnvSummary | None:
     """Aggregate cached environment stats across all packages.
 
     Returns dict with 'python_versions' and 'os_distribution' keys,

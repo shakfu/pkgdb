@@ -206,9 +206,7 @@ def store_cached_repo_data(
     conn.commit()
 
 
-def clear_github_cache(
-    conn: sqlite3.Connection, expired_only: bool = True
-) -> int:
+def clear_github_cache(conn: sqlite3.Connection, expired_only: bool = True) -> int:
     """Clear GitHub API cache entries.
 
     Returns number of entries cleared.
@@ -397,9 +395,7 @@ def fetch_package_github_stats(
     owner, repo = parsed
     try:
         stats = fetch_repo_stats(owner, repo, conn=conn, use_cache=use_cache)
-        return RepoResult(
-            package_name=package_name, repo_url=github_url, stats=stats
-        )
+        return RepoResult(package_name=package_name, repo_url=github_url, stats=stats)
     except HTTPError as e:
         if e.code == 404:
             error = "Repository not found"
@@ -407,10 +403,6 @@ def fetch_package_github_stats(
             error = "Rate limited (retries exhausted)"
         else:
             error = f"HTTP {e.code}"
-        return RepoResult(
-            package_name=package_name, repo_url=github_url, error=error
-        )
+        return RepoResult(package_name=package_name, repo_url=github_url, error=error)
     except (URLError, TimeoutError, OSError) as e:
-        return RepoResult(
-            package_name=package_name, repo_url=github_url, error=str(e)
-        )
+        return RepoResult(package_name=package_name, repo_url=github_url, error=str(e))
