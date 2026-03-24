@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.9]
+
 ### Added
 
 - GitHub repository statistics: fetch stars, forks, open issues, language, activity status, and more for tracked packages
@@ -16,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `pkgdb github clear [--all]` clears cached GitHub API responses
   - `--sort` option for GitHub fetch: sort by `stars` (default), `name`, or `activity`
   - `--no-cache` flag to bypass the 24-hour cache and fetch fresh data
-  - `-g/--github` flag on `fetch` and `update` commands to include GitHub stats alongside PyPI download stats
+  - `-g/--github` flag on `fetch`, `update`, and `report` commands to include GitHub stats alongside PyPI download stats
+  - HTML report includes GitHub columns (Stars, Forks, Language, Activity, Repository) when `--github` is passed; pulls from cache if available, skips gracefully if not
   - GitHub repo URL auto-discovery from PyPI package metadata (`project_urls`, `home_page`)
   - Supports `GITHUB_TOKEN` / `GH_TOKEN` environment variables for higher API rate limits
   - 24-hour response caching in SQLite (`github_cache` table) to minimize API calls

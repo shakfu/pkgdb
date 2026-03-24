@@ -121,8 +121,9 @@ pkgdb update
 # Fetch stats and generate report with environment summary
 pkgdb update -e
 
-# Include GitHub stats in fetch or update
+# Include GitHub stats in fetch, report, or update
 pkgdb fetch --github
+pkgdb report --github
 pkgdb update --github
 
 # Clean up orphaned stats (for packages no longer tracked)
@@ -202,9 +203,9 @@ Modular CLI application with the following commands:
 - **export**: Export stats in CSV, JSON, or Markdown format
 
 **Reporting:**
-- **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With package argument, generates detailed single-package report
+- **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With `-g` flag, includes GitHub stats (stars, forks, language, activity) in the table. With package argument, generates detailed single-package report
 - **badge**: Generate shields.io-style SVG badge for a package
-- **update**: Run fetch then report in one step (supports `-e` for environment summary)
+- **update**: Run fetch then report in one step (supports `-e` for environment summary, `-g` for GitHub stats)
 
 **Maintenance:**
 - **cleanup**: Remove orphaned stats and optionally prune old data
