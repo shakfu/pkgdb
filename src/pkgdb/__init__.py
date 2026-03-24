@@ -56,6 +56,18 @@ from .db import (
     store_stats,
     store_stats_batch,
 )
+from .github import (
+    GITHUB_CACHE_TTL_HOURS,
+    RepoResult,
+    RepoStats,
+    clear_github_cache,
+    extract_github_url,
+    fetch_package_github_stats,
+    fetch_repo_stats,
+    get_github_cache_stats,
+    get_github_token,
+    parse_github_url,
+)
 from .export import (
     export_csv,
     export_json,
@@ -140,6 +152,17 @@ __all__ = [
     "store_env_stats",
     "store_stats",
     "store_stats_batch",
+    # GitHub
+    "GITHUB_CACHE_TTL_HOURS",
+    "RepoResult",
+    "RepoStats",
+    "clear_github_cache",
+    "extract_github_url",
+    "fetch_package_github_stats",
+    "fetch_repo_stats",
+    "get_github_cache_stats",
+    "get_github_token",
+    "parse_github_url",
     # Export
     "export_csv",
     "export_json",

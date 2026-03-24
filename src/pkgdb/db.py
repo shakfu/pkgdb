@@ -89,6 +89,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS github_cache (
+            repo_key TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME NOT NULL
+        )
+    """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_package_name
         ON package_stats(package_name)
     """)

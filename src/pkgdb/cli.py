@@ -139,6 +139,14 @@ def cmd_fetch(args: argparse.Namespace) -> None:
         else:
             logger.info("All packages already up to date.")
 
+    # Optionally fetch GitHub stats
+    if getattr(args, "github", False):
+        logger.info("Fetching GitHub stats...")
+        gh_results = service.fetch_github_stats()
+        gh_ok = sum(1 for r in gh_results if r.success)
+        gh_fail = sum(1 for r in gh_results if not r.success)
+        logger.info("GitHub stats: %d succeeded, %d failed.", gh_ok, gh_fail)
+
 
 def cmd_report(args: argparse.Namespace) -> None:
     """Report command: generate HTML report from stored data."""
@@ -153,7 +161,10 @@ def cmd_report(args: argparse.Namespace) -> None:
         if include_env:
             logger.info("Fetching environment data (this may take a moment)...")
 
-        if not service.generate_report(args.output, include_env=include_env):
+        include_github = getattr(args, "github", False)
+        if not service.generate_report(
+            args.output, include_env=include_env, include_github=include_github
+        ):
             logger.warning("No data in database. Run 'fetch' first.")
             return
 
@@ -530,6 +541,85 @@ def cmd_badge(args: argparse.Namespace) -> None:
         print(svg)
 
 
+def cmd_github(args: argparse.Namespace) -> None:
+    """GitHub command: show GitHub repository stats for tracked packages."""
+    service = PackageStatsService(args.database)
+
+    packages = service.list_packages()
+    if not packages:
+        logger.warning("No packages are being tracked.")
+        return
+
+    subcommand = getattr(args, "github_command", "fetch")
+
+    if subcommand == "cache":
+        cache_stats = service.get_github_cache_stats()
+        print("GitHub Cache Statistics:")
+        print(f"  Total entries:   {cache_stats['total']}")
+        print(f"  Valid entries:   {cache_stats['valid']}")
+        print(f"  Expired entries: {cache_stats['expired']}")
+        return
+
+    if subcommand == "clear":
+        all_entries = getattr(args, "all", False)
+        cleared = service.clear_github_cache(expired_only=not all_entries)
+        label = "all" if all_entries else "expired"
+        logger.info("Cleared %d %s GitHub cache entries.", cleared, label)
+        return
+
+    # Default: fetch
+    no_cache = getattr(args, "no_cache", False)
+    sort_by = getattr(args, "sort", "stars")
+
+    logger.info("Fetching GitHub stats for %d packages...", len(packages))
+    results = service.fetch_github_stats(use_cache=not no_cache)
+
+    successful = [r for r in results if r.success]
+    failed = [r for r in results if not r.success]
+
+    if sort_by == "stars":
+        successful.sort(
+            key=lambda r: r.stats.stars if r.stats else 0, reverse=True
+        )
+    elif sort_by == "name":
+        successful.sort(key=lambda r: r.package_name)
+    elif sort_by == "activity":
+        successful.sort(
+            key=lambda r: r.stats.days_since_push or 9999 if r.stats else 9999
+        )
+
+    if successful:
+        print()
+        rows = []
+        for r in successful:
+            s = r.stats
+            if s is None:
+                continue
+            rows.append([
+                r.package_name,
+                f"{s.stars:,}",
+                f"{s.forks:,}",
+                s.activity_status,
+                s.language or "-",
+            ])
+
+        headers = ["Package", "Stars", "Forks", "Activity", "Language"]
+        print(tabulate(rows, headers=headers, tablefmt="simple"))
+
+        total_stars = sum(r.stats.stars for r in successful if r.stats)
+        total_forks = sum(r.stats.forks for r in successful if r.stats)
+        print(f"\nTotal: {total_stars:,} stars, {total_forks:,} forks")
+
+    if failed:
+        print()
+        for r in failed:
+            logger.warning("  %s: %s", r.package_name, r.error)
+
+    logger.info(
+        "Done. (%d succeeded, %d failed)", len(successful), len(failed)
+    )
+
+
 def cmd_version(args: argparse.Namespace) -> None:
     """Version command: show pkgdb version."""
     print(f"pkgdb {__version__}")
@@ -639,6 +729,12 @@ def create_parser() -> argparse.ArgumentParser:
         "fetch",
         help="Fetch download statistics from PyPI for tracked packages",
     )
+    fetch_parser.add_argument(
+        "-g",
+        "--github",
+        action="store_true",
+        help="Also fetch GitHub repository stats (stars, forks, etc.)",
+    )
     fetch_parser.set_defaults(func=cmd_fetch)
 
     # show command (was 'list')
@@ -698,6 +794,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--no-browser",
         action="store_true",
         help="Don't open report in browser (useful for automation)",
+    )
+    report_parser.add_argument(
+        "-g",
+        "--github",
+        action="store_true",
+        help="Include GitHub stats (stars, forks, etc.) in report table",
     )
     report_parser.set_defaults(func=cmd_report)
 
@@ -776,6 +878,12 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Don't open report in browser (useful for automation)",
     )
+    update_parser.add_argument(
+        "-g",
+        "--github",
+        action="store_true",
+        help="Also fetch GitHub repository stats (stars, forks, etc.)",
+    )
     update_parser.set_defaults(func=cmd_update)
 
     # cleanup command
@@ -819,6 +927,41 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output file (default: stdout)",
     )
     badge_parser.set_defaults(func=cmd_badge)
+
+    # github command
+    github_parser = subparsers.add_parser(
+        "github",
+        help="Show GitHub repository stats (stars, forks, activity)",
+    )
+    github_sub = github_parser.add_subparsers(dest="github_command")
+
+    gh_fetch = github_sub.add_parser("fetch", help="Fetch GitHub statistics")
+    gh_fetch.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Bypass cache and fetch fresh data from GitHub API",
+    )
+    gh_fetch.add_argument(
+        "-s",
+        "--sort",
+        choices=["stars", "name", "activity"],
+        default="stars",
+        help="Sort results by field (default: stars)",
+    )
+    gh_fetch.set_defaults(func=cmd_github, github_command="fetch")
+
+    gh_cache = github_sub.add_parser("cache", help="Show GitHub cache statistics")
+    gh_cache.set_defaults(func=cmd_github, github_command="cache")
+
+    gh_clear = github_sub.add_parser("clear", help="Clear GitHub cache")
+    gh_clear.add_argument(
+        "--all",
+        action="store_true",
+        help="Clear all cache entries (not just expired)",
+    )
+    gh_clear.set_defaults(func=cmd_github, github_command="clear")
+
+    github_parser.set_defaults(func=cmd_github, github_command="fetch")
 
     # version command
     version_parser = subparsers.add_parser(

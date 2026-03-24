@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .api import fetch_os_stats, fetch_python_versions
+from .github import RepoStats
 from .types import CategoryDownloads, EnvSummary, PackageStats
 
 logger = logging.getLogger("pkgdb")
@@ -558,6 +559,7 @@ def generate_html_report(
     history: dict[str, list[dict[str, Any]]] | None = None,
     packages: list[str] | None = None,
     env_summary: EnvSummary | None = None,
+    github_stats: dict[str, RepoStats] | None = None,
 ) -> None:
     """Generate a self-contained HTML report with inline SVG charts.
 
@@ -567,6 +569,7 @@ def generate_html_report(
         history: Historical data for time-series chart
         packages: List of package names (unused, kept for compatibility)
         env_summary: Pre-fetched Python version and OS summary data
+        github_stats: Dict mapping package names to RepoStats (optional)
     """
     if not stats:
         logger.warning("No statistics available to generate report.")
@@ -615,6 +618,7 @@ def generate_html_report(
 
     # Build stats table rows
     has_growth = any("week_growth" in s for s in stats)
+    has_github = bool(github_stats)
     table_rows = ""
     for i, s in enumerate(stats, 1):
         growth_cells = ""
@@ -625,6 +629,26 @@ def generate_html_report(
                 f'                <td class="number">{_format_growth(wg)}</td>\n'
                 f'                <td class="number">{_format_growth(mg)}</td>\n'
             )
+        github_cells = ""
+        if has_github:
+            gh = github_stats.get(s["package_name"]) if github_stats else None
+            if gh:
+                repo_link = f'<a href="https://github.com/{gh.full_name}">{gh.full_name}</a>'
+                github_cells = (
+                    f'                <td class="number">{gh.stars:,}</td>\n'
+                    f'                <td class="number">{gh.forks:,}</td>\n'
+                    f'                <td>{gh.language or "-"}</td>\n'
+                    f'                <td>{gh.activity_status}</td>\n'
+                    f'                <td>{repo_link}</td>\n'
+                )
+            else:
+                github_cells = (
+                    '                <td class="number">-</td>\n'
+                    '                <td class="number">-</td>\n'
+                    '                <td>-</td>\n'
+                    '                <td>-</td>\n'
+                    '                <td>-</td>\n'
+                )
         table_rows += f"""            <tr>
                 <td>{i}</td>
                 <td><a href="https://pypi.org/project/{s["package_name"]}/">{s["package_name"]}</a></td>
@@ -632,8 +656,19 @@ def generate_html_report(
                 <td class="number">{s["last_month"] or 0:,}</td>
                 <td class="number">{s["last_week"] or 0:,}</td>
                 <td class="number">{s["last_day"] or 0:,}</td>
-{growth_cells}            </tr>
+{growth_cells}{github_cells}            </tr>
 """
+
+    # Build extra header columns
+    growth_header = (
+        '<th class="number">Week Growth</th><th class="number">Month Growth</th>'
+        if has_growth else ""
+    )
+    github_header = (
+        '<th class="number">Stars</th><th class="number">Forks</th>'
+        '<th>Language</th><th>Activity</th><th>Repository</th>'
+        if has_github else ""
+    )
 
     # Build body content
     body_content = f"""    <h1>PyPI Package Download Statistics</h1>
@@ -667,7 +702,8 @@ def generate_html_report(
                 <th class="number">Last Month</th>
                 <th class="number">Last Week</th>
                 <th class="number">Last Day</th>
-                {"<th class=\"number\">Week Growth</th><th class=\"number\">Month Growth</th>" if has_growth else ""}
+                {growth_header}
+                {github_header}
             </tr>
         </thead>
         <tbody>

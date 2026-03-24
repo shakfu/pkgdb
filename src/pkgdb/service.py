@@ -35,6 +35,12 @@ from .db import (
 )
 from .badges import generate_downloads_badge
 from .export import export_csv, export_json, export_markdown
+from .github import (
+    RepoResult,
+    clear_github_cache,
+    fetch_package_github_stats,
+    get_github_cache_stats,
+)
 from .reports import generate_html_report, generate_package_html_report
 from .types import CategoryDownloads, DatabaseInfo, PackageStats
 from .utils import validate_output_path, validate_package_name
@@ -399,12 +405,15 @@ class PackageStatsService:
         self,
         output_file: str,
         include_env: bool = False,
+        include_github: bool = False,
     ) -> bool:
         """Generate HTML report for all packages.
 
         Args:
             output_file: Path to write HTML file.
             include_env: If True, include Python/OS distribution summary.
+            include_github: If True, include GitHub stats (stars, forks, etc.)
+                from cache. Packages without cached data are skipped.
 
         Returns:
             True if report was generated, False if no data available.
@@ -433,7 +442,19 @@ class PackageStatsService:
                 if env_summary is None:
                     env_summary = aggregate_env_stats(packages)
 
-        generate_html_report(stats, output_file, all_history, packages, env_summary)
+            github_stats = None
+            if include_github:
+                from .github import fetch_package_github_stats
+
+                github_stats = {}
+                for pkg in packages:
+                    result = fetch_package_github_stats(pkg, conn=conn, use_cache=True)
+                    if result.success and result.stats is not None:
+                        github_stats[pkg] = result.stats
+
+        generate_html_report(
+            stats, output_file, all_history, packages, env_summary, github_stats
+        )
         return True
 
     def generate_package_report(self, package: str, output_file: str) -> bool:
@@ -564,6 +585,60 @@ class PackageStatsService:
         count = count_map.get(period, count_map["total"])
 
         return generate_downloads_badge(count, period=period, color=color)
+
+    # -------------------------------------------------------------------------
+    # GitHub Stats
+    # -------------------------------------------------------------------------
+
+    def fetch_github_stats(
+        self,
+        packages: list[str] | None = None,
+        use_cache: bool = True,
+    ) -> list[RepoResult]:
+        """Fetch GitHub repository stats for tracked packages.
+
+        Args:
+            packages: Specific packages to fetch. If None, fetches all tracked.
+            use_cache: Whether to use cached GitHub API responses (24h TTL).
+
+        Returns:
+            List of RepoResult with stats or error for each package.
+        """
+        if packages is None:
+            pkg_list = [p.name for p in self.list_packages()]
+        else:
+            pkg_list = packages
+
+        results: list[RepoResult] = []
+        with get_db(self.db_path) as conn:
+            for pkg in pkg_list:
+                result = fetch_package_github_stats(
+                    pkg, conn=conn, use_cache=use_cache
+                )
+                results.append(result)
+
+        return results
+
+    def clear_github_cache(self, expired_only: bool = True) -> int:
+        """Clear GitHub API cache.
+
+        Args:
+            expired_only: If True, only clear expired entries.
+
+        Returns:
+            Number of entries cleared.
+        """
+        with get_db(self.db_path) as conn:
+            return clear_github_cache(conn, expired_only=expired_only)
+
+    def get_github_cache_stats(self) -> dict[str, int]:
+        """Get GitHub cache statistics.
+
+        Returns:
+            Dict with 'total', 'valid', and 'expired' counts.
+        """
+        with get_db(self.db_path) as conn:
+            return get_github_cache_stats(conn)
 
     # -------------------------------------------------------------------------
     # Maintenance

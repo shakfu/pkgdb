@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- GitHub repository statistics: fetch stars, forks, open issues, language, activity status, and more for tracked packages
+  - New `github` command with subcommands:
+    - `pkgdb github [fetch]` displays GitHub stats table (stars, forks, activity, language) for all tracked packages
+    - `pkgdb github cache` shows cache statistics
+    - `pkgdb github clear [--all]` clears cached GitHub API responses
+  - `--sort` option for GitHub fetch: sort by `stars` (default), `name`, or `activity`
+  - `--no-cache` flag to bypass the 24-hour cache and fetch fresh data
+  - `-g/--github` flag on `fetch` and `update` commands to include GitHub stats alongside PyPI download stats
+  - GitHub repo URL auto-discovery from PyPI package metadata (`project_urls`, `home_page`)
+  - Supports `GITHUB_TOKEN` / `GH_TOKEN` environment variables for higher API rate limits
+  - 24-hour response caching in SQLite (`github_cache` table) to minimize API calls
+  - Exponential backoff with jitter on rate limiting (HTTP 403)
+- New module: `github.py` with `RepoStats`, `RepoResult`, `parse_github_url()`, `extract_github_url()`, `fetch_repo_stats()`, `fetch_package_github_stats()`
+- New service methods: `fetch_github_stats()`, `clear_github_cache()`, `get_github_cache_stats()`
+
 ## [0.1.8]
 
 ### Fixed

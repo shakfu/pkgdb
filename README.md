@@ -99,12 +99,31 @@ pkgdb badge <package-name> --period month
 # Save badge to file
 pkgdb badge <package-name> -o badge.svg
 
+# Fetch GitHub repository stats (stars, forks, activity, language)
+pkgdb github
+
+# Sort GitHub stats by name or activity instead of stars
+pkgdb github fetch --sort name
+
+# Bypass GitHub cache and fetch fresh data
+pkgdb github fetch --no-cache
+
+# Show GitHub cache statistics
+pkgdb github cache
+
+# Clear expired GitHub cache entries (or --all for everything)
+pkgdb github clear
+
 # Fetch stats and generate report in one step
 # (skips packages already fetched in the last 24 hours)
 pkgdb update
 
 # Fetch stats and generate report with environment summary
 pkgdb update -e
+
+# Include GitHub stats in fetch or update
+pkgdb fetch --github
+pkgdb update --github
 
 # Clean up orphaned stats (for packages no longer tracked)
 pkgdb cleanup
@@ -175,10 +194,11 @@ Modular CLI application with the following commands:
 - **sync**: Sync packages from a PyPI user account (with optional `--prune`)
 
 **Data operations:**
-- **fetch**: Fetch download stats from PyPI and store in SQLite
+- **fetch**: Fetch download stats from PyPI and store in SQLite (with `-g` for GitHub stats)
 - **show**: Display stats in terminal with trend sparklines and growth %
 - **history**: Show historical data for a specific package
 - **stats**: Show detailed breakdown (Python versions, OS) for a package
+- **github**: Fetch and display GitHub repository stats (stars, forks, activity, language)
 - **export**: Export stats in CSV, JSON, or Markdown format
 
 **Reporting:**
@@ -215,7 +235,13 @@ The `fetch_attempts` table tracks API requests:
 - `attempt_time`: ISO timestamp of last fetch attempt
 - `success`: Whether the fetch succeeded (1) or failed (0)
 
-Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period. Environment stats are cached alongside download stats, so reports can be generated offline.
+The `github_cache` table caches GitHub API responses:
+- `repo_key`: Lowercased `owner/repo` identifier (primary key)
+- `data`: Full JSON response from the GitHub API
+- `fetched_at`: When the response was cached
+- `expires_at`: Cache expiry time (default: 24 hours)
+
+Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period. Environment stats are cached alongside download stats, so reports can be generated offline. GitHub API responses are cached for 24 hours to minimize API calls.
 
 ## Files
 
@@ -226,6 +252,7 @@ Source modules in `src/pkgdb/`:
 - `db.py`: Database operations and context manager
 - `api.py`: pypistats API wrapper with parallel fetching
 - `reports.py`: HTML/SVG report generation
+- `github.py`: GitHub API client with caching and rate limit handling
 - `badges.py`: SVG badge generation
 - `export.py`: CSV/JSON/Markdown export
 - `utils.py`: Helper functions and validation
