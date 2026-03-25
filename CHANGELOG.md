@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10]
+
+### Fixed
+
+- `check_package_exists` now normalizes package names per PEP 503 before querying PyPI Simple API, so names with mixed case or underscores (e.g. `Requests`, `my_pkg`) resolve correctly
+- `remove_package` now deletes the corresponding `fetch_attempts` row, preventing re-added packages from being incorrectly skipped by `fetch` due to stale attempt records
+- `cleanup_orphaned_stats` now also cleans orphaned `fetch_attempts` entries
+- GitHub `--sort activity` no longer ranks repos pushed today as stale: fixed operator precedence bug and falsy-zero handling in the sort key
+- `pkgdb report <package>` now correctly reports failure when stats cannot be fetched, instead of announcing success and opening a non-existent file
+
 ## [0.1.9]
 
 ### Added

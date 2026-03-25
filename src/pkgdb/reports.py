@@ -729,7 +729,7 @@ def generate_package_html_report(
     history: list[dict[str, Any]] | None = None,
     python_versions: list[CategoryDownloads] | None = None,
     os_stats: list[CategoryDownloads] | None = None,
-) -> None:
+) -> bool:
     """Generate a detailed HTML report for a single package.
 
     Includes download stats, Python version distribution, and OS breakdown.
@@ -745,7 +745,7 @@ def generate_package_html_report(
 
     if not stats:
         logger.warning("Could not fetch stats for %s", package)
-        return
+        return False
 
     # Use cached env data if provided, otherwise fetch live
     if python_versions is None:
@@ -801,3 +801,4 @@ def generate_package_html_report(
     with open(output_file, "w") as f:
         f.write(html)
     logger.info("Report generated: %s", output_file)
+    return True

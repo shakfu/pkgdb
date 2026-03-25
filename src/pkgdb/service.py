@@ -493,7 +493,7 @@ class PackageStatsService:
                 }
                 break
 
-        generate_package_html_report(
+        return generate_package_html_report(
             package,
             output_file,
             stats=pkg_stats,
@@ -501,7 +501,6 @@ class PackageStatsService:
             python_versions=py_versions,
             os_stats=os_data,
         )
-        return True
 
     # -------------------------------------------------------------------------
     # Export

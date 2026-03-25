@@ -141,6 +141,11 @@ def remove_package(conn: sqlite3.Connection, name: str) -> bool:
         "DELETE FROM packages WHERE package_name = ?",
         (name,),
     )
+    if cursor.rowcount > 0:
+        conn.execute(
+            "DELETE FROM fetch_attempts WHERE package_name = ?",
+            (name,),
+        )
     conn.commit()
     return cursor.rowcount > 0
 
@@ -565,6 +570,10 @@ def cleanup_orphaned_stats(conn: sqlite3.Connection) -> int:
     """)
     conn.execute("""
         DELETE FROM os_stats
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
+    conn.execute("""
+        DELETE FROM fetch_attempts
         WHERE package_name NOT IN (SELECT package_name FROM packages)
     """)
     conn.commit()

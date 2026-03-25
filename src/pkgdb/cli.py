@@ -156,7 +156,9 @@ def cmd_report(args: argparse.Namespace) -> None:
     no_browser = getattr(args, "no_browser", False)
 
     if package:
-        service.generate_package_report(package, args.output)
+        if not service.generate_package_report(package, args.output):
+            logger.warning("Could not fetch stats for %s.", package)
+            return
     else:
         include_env = getattr(args, "env", False)
         if include_env:
@@ -584,7 +586,11 @@ def cmd_github(args: argparse.Namespace) -> None:
         successful.sort(key=lambda r: r.package_name)
     elif sort_by == "activity":
         successful.sort(
-            key=lambda r: r.stats.days_since_push or 9999 if r.stats else 9999
+            key=lambda r: (
+                r.stats.days_since_push
+                if r.stats and r.stats.days_since_push is not None
+                else 9999
+            )
         )
 
     if successful:

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import xmlrpc.client
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from json import JSONDecodeError
@@ -39,7 +40,9 @@ def check_package_exists(package_name: str) -> tuple[bool | None, str | None]:
         - (False, None) if package not found (404)
         - (None, error_message) on network or other errors
     """
-    url = f"{PYPI_SIMPLE_URL}/{package_name}/"
+    # PEP 503: normalize name to lowercase, replace runs of [-_.] with single hyphen
+    normalized = re.sub(r"[-_.]+", "-", package_name).lower()
+    url = f"{PYPI_SIMPLE_URL}/{normalized}/"
     try:
         request = Request(url, method="HEAD")
         with urlopen(request, timeout=PACKAGE_CHECK_TIMEOUT) as response:
