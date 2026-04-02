@@ -60,3 +60,18 @@ class DatabaseInfo(TypedDict):
     first_fetch: str | None
     last_fetch: str | None
     db_size_bytes: int
+
+
+class PyPIRelease(TypedDict):
+    """A PyPI package release."""
+
+    version: str
+    upload_date: str
+
+
+class GitHubRelease(TypedDict):
+    """A GitHub repository release."""
+
+    tag_name: str
+    published_at: str
+    name: str | None

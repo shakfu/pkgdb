@@ -20,6 +20,20 @@ uv sync
 
 ## Usage
 
+### Quick start
+
+The fastest way to get started is `pkgdb init`, which walks you through setup:
+
+```bash
+pkgdb init
+```
+
+This prompts for your PyPI username (optional), syncs your packages, fetches current stats, and generates an HTML report -- all in one step. For non-interactive use:
+
+```bash
+pkgdb init --user <pypi-username> --no-browser
+```
+
 ### Configure packages
 
 Create `~/.pkgdb/packages.json` to list packages to track:
@@ -36,9 +50,36 @@ Or use an object with a `published` key:
 
 Alternatively, use `pkgdb add <package>` to add packages individually. By default, packages are verified to exist on PyPI before adding. Use `--no-verify` to skip this check.
 
+### Configuration file
+
+Create `~/.pkgdb/config.toml` to set persistent defaults:
+
+```toml
+[defaults]
+github = true           # always include GitHub stats
+environment = true      # always include environment summary
+no_browser = false      # don't auto-open reports
+sort_by = "total"       # default sort order (total, month, week, day, growth, name)
+# database = "~/.pkgdb/pkg.db"  # custom database path
+
+[report]
+# output = "~/.pkgdb/report.html"  # custom report path
+
+[init]
+# pypi_user = "myusername"  # default PyPI username for init command
+```
+
+CLI flags always override config values. The config file is optional -- all settings have sensible defaults.
+
 ### Commands
 
 ```bash
+# Guided first-run setup (sync packages, fetch stats, generate report)
+pkgdb init
+
+# Non-interactive init with PyPI username
+pkgdb init --user <pypi-username>
+
 # Add a package to tracking (verifies it exists on PyPI)
 pkgdb add <package-name>
 
@@ -61,20 +102,37 @@ pkgdb fetch
 # Display stats in terminal (includes trend sparklines and growth %)
 pkgdb show
 
-# Show historical stats for a specific package
+# Show package history (HTML report with chart + releases, opens in browser)
 pkgdb history <package-name>
 
-# Show history since a date (absolute or relative)
-pkgdb history <package-name> --since 2024-01-01
+# Show history as text table in terminal
+pkgdb history <package-name> --text
+
+# Filter history by date (works with both HTML and text output)
 pkgdb history <package-name> --since 7d   # last 7 days
 pkgdb history <package-name> --since 2w   # last 2 weeks
 pkgdb history <package-name> --since 1m   # last month (30 days)
+pkgdb history <package-name> --since 2024-01-01
+
+# Compare stats between time periods
+pkgdb diff                   # compare to previous fetch
+pkgdb diff --period week     # this week vs last week
+pkgdb diff --period month    # this month vs last month
+
+# Show release history for a package (PyPI and GitHub)
+pkgdb releases <package-name>
+
+# Show only the most recent 10 releases
+pkgdb releases <package-name> --limit 10
 
 # Generate HTML report with charts (opens in browser)
 pkgdb report
 
 # Generate detailed HTML report for a single package
 pkgdb report <package-name>
+
+# Generate project view with release timeline overlay
+pkgdb report <package-name> --project
 
 # Include environment summary (Python versions, OS) in report
 pkgdb report -e
@@ -160,8 +218,11 @@ pkgdb report -o custom-report.html
 # Generate report without opening browser (useful for automation)
 pkgdb report --no-browser
 
-# Limit history output to N days
+# Limit history to N days
 pkgdb history my-package -n 14
+
+# History report to file without opening browser
+pkgdb history my-package -o history.html --no-browser
 
 # Show history since a specific date (or relative: 7d, 2w, 1m)
 pkgdb history my-package --since 2024-01-01
@@ -176,8 +237,13 @@ pkgdb show --limit 10
 # Sort show output by field (total, month, week, day, growth, name)
 pkgdb show --sort-by month
 
-# Output show in JSON format
+# JSON output (available on show, packages, history, stats, cleanup, github)
 pkgdb show --json
+pkgdb packages --json
+pkgdb history my-package --json
+pkgdb stats my-package --json
+pkgdb cleanup --json
+pkgdb github --json
 
 # Export to file instead of stdout
 pkgdb export -f json -o stats.json
@@ -186,6 +252,9 @@ pkgdb export -f json -o stats.json
 ## Architecture
 
 Modular CLI application with the following commands:
+
+**Setup:**
+- **init**: Guided first-run setup (sync packages, fetch stats, generate report)
 
 **Package management:**
 - **add**: Add a package to tracking
@@ -197,13 +266,15 @@ Modular CLI application with the following commands:
 **Data operations:**
 - **fetch**: Fetch download stats from PyPI and store in SQLite (with `-g` for GitHub stats)
 - **show**: Display stats in terminal with trend sparklines and growth %
-- **history**: Show historical data for a specific package
+- **diff**: Compare download stats between time periods (previous fetch, week-over-week, month-over-month)
+- **history**: Show package history as HTML report (default) or text table (`--text`)
 - **stats**: Show detailed breakdown (Python versions, OS) for a package
+- **releases**: Show release history for a package (PyPI and GitHub)
 - **github**: Fetch and display GitHub repository stats (stars, forks, activity, language)
 - **export**: Export stats in CSV, JSON, or Markdown format
 
 **Reporting:**
-- **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With `-g` flag, includes GitHub stats (stars, forks, language, activity) in the table. With package argument, generates detailed single-package report
+- **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With `-g` flag, includes GitHub stats (stars, forks, language, activity) in the table. With package argument, generates detailed single-package report. With `-p/--project` flag, generates project view with release timeline overlay
 - **badge**: Generate shields.io-style SVG badge for a package
 - **update**: Run fetch then report in one step (supports `-e` for environment summary, `-g` for GitHub stats)
 
@@ -242,13 +313,29 @@ The `github_cache` table caches GitHub API responses:
 - `fetched_at`: When the response was cached
 - `expires_at`: Cache expiry time (default: 24 hours)
 
-Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period. Environment stats are cached alongside download stats, so reports can be generated offline. GitHub API responses are cached for 24 hours to minimize API calls.
+The `pypi_releases` table caches PyPI release history:
+- `package_name`: Package identifier
+- `version`: Release version string
+- `upload_date`: Date the version was uploaded (YYYY-MM-DD)
+
+The `github_releases` table caches GitHub release history:
+- `repo_key`: Lowercased `owner/repo` identifier
+- `tag_name`: Release tag (e.g. "v0.1.0")
+- `published_at`: Date the release was published (YYYY-MM-DD)
+
+The `release_cache` table tracks freshness of release data:
+- `cache_key`: Cache identifier (e.g. "pypi:my-package" or "github:owner/repo")
+- `fetched_at`: When the data was last fetched
+- `expires_at`: Cache expiry time (default: 24 hours)
+
+Stats are upserted per package per day. Fetch attempts are tracked to avoid hitting PyPI rate limits - packages are only fetched once per 24-hour period. Environment stats are cached alongside download stats, so reports can be generated offline. GitHub API responses are cached for 24 hours to minimize API calls. Release data (PyPI and GitHub) is cached for 24 hours.
 
 ## Files
 
 Source modules in `src/pkgdb/`:
 - `__init__.py`: Public API and version
 - `cli.py`: CLI argument parsing and commands
+- `config.py`: Configuration file loading (`~/.pkgdb/config.toml`)
 - `service.py`: High-level service layer
 - `db.py`: Database operations and context manager
 - `api.py`: pypistats API wrapper with parallel fetching
@@ -261,6 +348,7 @@ Source modules in `src/pkgdb/`:
 - `logging.py`: Logging configuration
 
 Data files (all in `~/.pkgdb/`):
+- `config.toml`: Configuration file for persistent defaults (optional)
 - `packages.json`: Package list configuration (optional, can use `add` command instead)
 - `pkg.db`: SQLite database (auto-created)
 - `report.html`: Generated HTML report (default output)
@@ -273,6 +361,23 @@ An example workflow is provided at `.github/workflows/fetch-stats.yml.example` f
 2. Configure your package list or PyPI username
 3. The workflow will fetch stats daily and commit updates to your repo
 
+## Documentation
+
+API documentation is built with MkDocs:
+
+```bash
+# Build docs
+make docs
+
+# Serve locally with live reload
+make docs-serve
+
+# Deploy to GitHub Pages
+make docs-deploy
+```
+
+Then open `http://127.0.0.1:8000` to browse the docs locally.
+
 ## Development
 
 ```bash
@@ -284,6 +389,9 @@ pytest
 
 # Run tests with verbose output
 pytest -v
+
+# Full QA (test + lint + typecheck + format)
+make qa
 ```
 
 ## Dependencies
@@ -294,3 +402,8 @@ Runtime:
 
 Development:
 - `pytest`: Testing framework
+
+Documentation:
+- `mkdocs`: Static site generator
+- `mkdocs-material`: Material theme
+- `mkdocstrings[python]`: Auto-generated API docs from docstrings

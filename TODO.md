@@ -2,6 +2,20 @@
 
 Feature ideas for pkgdb, ordered by priority.
 
+## High Priority
+
+### Local Interactive Dashboard
+- [ ] `pkgdb serve` - launch a local web dashboard for browsing package stats
+  - Use stdlib `http.server` for the web server (no Flask/FastAPI dependency)
+  - Bundle lightweight JavaScript libraries in the package for interactivity (e.g., Chart.js or similar for zoomable/pannable charts, sortable tables, filtering)
+  - Dashboard pages:
+    - Overview: all tracked packages with sortable stats table, sparklines
+    - Package detail: download history chart (zoomable), release timeline, environment breakdown
+    - Comparison: side-by-side package charts
+  - Live data from the SQLite database (no static HTML generation)
+  - `--port` flag for custom port (default: 8080)
+  - `--no-browser` flag to suppress auto-open
+
 ## Medium Priority
 
 ### Database Maintenance

@@ -21,6 +21,7 @@ packages.yml
 # generated
 report.html
 pkg.db
+site/
 
 # agents
 .claude

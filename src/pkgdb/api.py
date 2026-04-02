@@ -12,7 +12,7 @@ from urllib.request import Request, urlopen
 import pypistats  # type: ignore[import-untyped]
 import urllib3
 
-from .types import CategoryDownloads, EnvSummary, PackageStats
+from .types import CategoryDownloads, EnvSummary, PackageStats, PyPIRelease
 
 logger = logging.getLogger("pkgdb")
 
@@ -219,6 +219,50 @@ def fetch_all_package_stats(
             results[pkg] = future.result()
 
     return results
+
+
+# PyPI JSON API endpoint
+PYPI_JSON_URL = "https://pypi.org/pypi"
+
+# Timeout for PyPI JSON API (seconds)
+PYPI_JSON_TIMEOUT = 15
+
+
+def fetch_pypi_releases(package_name: str) -> list[PyPIRelease] | None:
+    """Fetch release history from the PyPI JSON API.
+
+    Args:
+        package_name: Name of the package.
+
+    Returns:
+        List of releases sorted by upload date ascending,
+        or None if the API is unreachable.
+    """
+    normalized = re.sub(r"[-_.]+", "-", package_name).lower()
+    url = f"{PYPI_JSON_URL}/{normalized}/json"
+    try:
+        request = Request(url)
+        with urlopen(request, timeout=PYPI_JSON_TIMEOUT) as response:
+            data = json.loads(response.read())
+    except _API_ERRORS as e:
+        logger.warning("Error fetching PyPI releases for %s: %s", package_name, e)
+        return None
+
+    releases_dict = data.get("releases", {})
+    releases: list[PyPIRelease] = []
+
+    for version, files in releases_dict.items():
+        if not files:
+            continue
+        # Use the earliest upload_time among files for this version
+        dates = [f.get("upload_time", "") for f in files if f.get("upload_time")]
+        if not dates:
+            continue
+        upload_date = min(dates)[:10]  # YYYY-MM-DD
+        releases.append(PyPIRelease(version=version, upload_date=upload_date))
+
+    releases.sort(key=lambda r: r["upload_date"])
+    return releases
 
 
 # PyPI XML-RPC API endpoint

@@ -1,0 +1,53 @@
+site_name: pkgdb
+site_description: Track, store, and analyze PyPI package download statistics
+site_url: https://shakfu.github.io/pkgdb
+repo_url: https://github.com/shakfu/pkgdb
+repo_name: shakfu/pkgdb
+
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: teal
+  features:
+    - content.code.copy
+    - navigation.sections
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - CLI Reference: cli.md
+  - Python API:
+    - Overview: api/index.md
+    - Service Layer: api/service.md
+    - Types: api/types.md
+    - Database: api/database.md
+    - PyPI API: api/pypi.md
+    - GitHub: api/github.md
+    - Reports: api/reports.md
+    - Config: api/config.md
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            heading_level: 2
+            members_order: source
+            show_signature_annotations: true
+            separate_signature: true
+            docstring_style: google
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - toc:
+      permalink: true

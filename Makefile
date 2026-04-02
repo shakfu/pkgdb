@@ -1,7 +1,8 @@
 NAME := pkgdb
 
 .PHONY: all test coverage sync update fetch report lint typecheck format qa \
-		build wheel sdist check publish publish-test clean reset
+		build wheel sdist check publish publish-test clean reset \
+		docs docs-serve docs-deploy
 
 all: test
 
@@ -54,8 +55,18 @@ publish: check
 publish-test: check
 	@uv run twine upload --repository testpypi dist/*
 
+docs:
+	@uv run --group docs mkdocs build
+
+docs-serve:
+	@uv run --group docs mkdocs serve
+
+docs-deploy:
+	@uv run --group docs mkdocs gh-deploy --force
+
 clean:
 	@rm -f report.html
+	@rm -rf site/
 
 reset: clean
 	@rm -rf build dist .venv *.egg-info src/*.egg-info htmlcov .coverage

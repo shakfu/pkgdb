@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11]
+
+### Added
+
+- `init` command: guided first-run setup that combines package discovery, stats fetching, and report generation in a single interactive workflow
+  - `pkgdb init` prompts for PyPI username or manual package entry, fetches stats, and generates an HTML report
+  - `pkgdb init --user <username>` runs non-interactively (useful for scripts and CI)
+  - Supports `--no-browser` and `-o` output flags
+  - If packages are already tracked, asks whether to continue with a fetch
+  - Note: this is a new command distinct from the `init` removed in v0.1.5; that command only synced packages, while this one provides the full setup-to-report workflow
+- Configuration file support: `~/.pkgdb/config.toml` for persistent defaults
+  - `[defaults]` section: `database`, `github`, `environment`, `no_browser`, `sort_by`
+  - `[report]` section: `output` path
+  - `[init]` section: `pypi_user` for default PyPI username
+  - CLI flags always override config values
+  - Uses `tomllib` (stdlib in Python 3.11+); degrades gracefully on Python 3.10 without `tomli`
+  - Invalid TOML files log a warning and fall back to defaults
+- New module: `config.py` with `PkgdbConfig`, `load_config()`, `get_config_path()`
+- New function: `apply_config()` for merging config defaults into CLI args
+- `--json` flag added to `packages`, `history`, `stats`, `cleanup`, and `github` commands (including `github cache` and `github clear` subcommands) for machine-readable output
+- `show` command now displays a "Next update available in Xh Ym" footer when packages are within the 24-hour fetch cooldown
+- `releases` command: show release history for a package from PyPI and GitHub
+  - `pkgdb releases <package>` displays a merged, date-sorted table of all releases
+  - `--limit N` to show only the most recent N releases
+  - `--json` flag for machine-readable output
+  - PyPI releases fetched from `https://pypi.org/pypi/{package}/json`
+  - GitHub releases fetched from the GitHub Releases API (auto-discovered from PyPI metadata)
+  - 24-hour caching for both sources via `release_cache` table
+- Project view report: `pkgdb report <package> --project`
+  - Generates HTML report with download history line chart overlaid with release markers
+  - PyPI releases shown as blue dashed vertical lines; GitHub releases as orange dashed lines
+  - Includes merged release history table with date, version, and source
+  - Includes environment distribution (Python versions, OS breakdown)
+  - Uses 90-day history window (vs 30-day for standard package report)
+- New database tables: `pypi_releases`, `github_releases`, `release_cache`
+- New types: `PyPIRelease`, `GitHubRelease`
+- New API functions: `fetch_pypi_releases()`, `fetch_github_releases()`
+- New service methods: `fetch_package_releases()`, `generate_project_report()`
+- New report function: `generate_project_html_report()` with `_make_line_chart_with_markers()`
+- MkDocs-based API documentation with mkdocs-material theme and mkdocstrings autodoc
+  - `make docs` to build, `make docs-serve` to preview locally, `make docs-deploy` to publish to GitHub Pages
+  - Covers: getting started, CLI reference, Python API (service, types, database, PyPI, GitHub, reports, config)
+  - API reference auto-generated from source docstrings
+- `diff` command: compare download stats between two time periods
+  - `pkgdb diff` compares current stats to the previous fetch (default)
+  - `--period week` compares this week to last week
+  - `--period month` compares this month to last month
+  - `--sort-by` option to sort by total, month, week, day, change, or name
+  - `--json` flag for machine-readable output
+  - Shows absolute change and percentage change for each metric
+
+### Changed
+
+- `history` command now generates an HTML report by default with download chart, release markers, and history table (opens in browser)
+  - `--text` / `-t` flag for the previous terminal table output
+  - `--json` flag unchanged
+  - `-o` / `--output` for custom output path, `--no-browser` to suppress browser
+  - Default history window increased from 30 to 90 days
+- `show` command now hides Trend and Growth columns when there is only one data point per package, producing a cleaner output on first run instead of showing empty sparklines and blank growth percentages
+- Split monolithic `tests/test_pkgdb.py` (6100+ lines) into 13 focused test modules: `test_db`, `test_api`, `test_utils`, `test_export`, `test_reports`, `test_badges`, `test_github`, `test_service`, `test_cli`, `test_config`, `test_releases`, `test_integration`, and shared fixtures in `conftest.py`
+
 ## [0.1.10]
 
 ### Fixed

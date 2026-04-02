@@ -5,7 +5,7 @@ Reads published packages from packages.json, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.1.10"
+__version__ = "0.1.11"
 
 # Re-export public API from submodules
 from .api import (
@@ -14,6 +14,7 @@ from .api import (
     fetch_all_package_stats,
     fetch_os_stats,
     fetch_package_stats,
+    fetch_pypi_releases,
     fetch_python_versions,
     fetch_user_packages,
 )
@@ -24,17 +25,25 @@ from .badges import (
 )
 from .cli import (
     DEFAULT_PACKAGES_FILE,
+    apply_config,
     import_packages_from_file,
     load_packages,
     load_packages_from_file,
     main,
+)
+from .config import (
+    PkgdbConfig,
+    get_config_path,
+    load_config,
 )
 from .db import (
     DEFAULT_DB_FILE,
     DEFAULT_REPORT_FILE,
     add_package,
     cleanup_orphaned_stats,
+    get_all_github_releases,
     get_all_history,
+    get_all_pypi_releases,
     get_cached_env_summary,
     get_cached_os_stats,
     get_cached_python_versions,
@@ -42,17 +51,21 @@ from .db import (
     get_database_stats,
     get_db,
     get_db_connection,
+    get_github_releases,
     get_latest_stats,
     get_package_history,
     get_packages,
     get_next_update_seconds,
     get_packages_needing_update,
+    get_pypi_releases,
     get_stats_with_growth,
     init_db,
     prune_old_stats,
     record_fetch_attempt,
     remove_package,
     store_env_stats,
+    store_github_releases,
+    store_pypi_releases,
     store_stats,
     store_stats_batch,
 )
@@ -62,6 +75,7 @@ from .github import (
     RepoStats,
     clear_github_cache,
     extract_github_url,
+    fetch_github_releases,
     fetch_package_github_stats,
     fetch_repo_stats,
     get_github_cache_stats,
@@ -80,6 +94,7 @@ from .logging import (
 from .reports import (
     generate_html_report,
     generate_package_html_report,
+    generate_project_html_report,
     make_svg_pie_chart,
 )
 from .service import (
@@ -93,8 +108,10 @@ from .types import (
     CategoryDownloads,
     DatabaseInfo,
     EnvSummary,
+    GitHubRelease,
     HistoryRecord,
     PackageStats,
+    PyPIRelease,
     StatsWithGrowth,
 )
 from .utils import (
@@ -114,6 +131,7 @@ __all__ = [
     "fetch_all_package_stats",
     "fetch_os_stats",
     "fetch_package_stats",
+    "fetch_pypi_releases",
     "fetch_python_versions",
     "fetch_user_packages",
     # Badges
@@ -122,16 +140,23 @@ __all__ = [
     "generate_downloads_badge",
     # CLI
     "DEFAULT_PACKAGES_FILE",
+    "apply_config",
     "import_packages_from_file",
     "load_packages",
     "load_packages_from_file",
     "main",
+    # Config
+    "PkgdbConfig",
+    "get_config_path",
+    "load_config",
     # Database
     "DEFAULT_DB_FILE",
     "DEFAULT_REPORT_FILE",
     "add_package",
     "cleanup_orphaned_stats",
+    "get_all_github_releases",
     "get_all_history",
+    "get_all_pypi_releases",
     "get_cached_env_summary",
     "get_cached_os_stats",
     "get_cached_python_versions",
@@ -139,17 +164,21 @@ __all__ = [
     "get_database_stats",
     "get_db",
     "get_db_connection",
+    "get_github_releases",
     "get_latest_stats",
     "get_package_history",
     "get_packages",
     "get_next_update_seconds",
     "get_packages_needing_update",
+    "get_pypi_releases",
     "get_stats_with_growth",
     "init_db",
     "prune_old_stats",
     "record_fetch_attempt",
     "remove_package",
     "store_env_stats",
+    "store_github_releases",
+    "store_pypi_releases",
     "store_stats",
     "store_stats_batch",
     # GitHub
@@ -158,6 +187,7 @@ __all__ = [
     "RepoStats",
     "clear_github_cache",
     "extract_github_url",
+    "fetch_github_releases",
     "fetch_package_github_stats",
     "fetch_repo_stats",
     "get_github_cache_stats",
@@ -173,6 +203,7 @@ __all__ = [
     # Reports
     "generate_html_report",
     "generate_package_html_report",
+    "generate_project_html_report",
     "make_svg_pie_chart",
     # Service
     "FetchResult",
@@ -184,8 +215,10 @@ __all__ = [
     "CategoryDownloads",
     "DatabaseInfo",
     "EnvSummary",
+    "GitHubRelease",
     "HistoryRecord",
     "PackageStats",
+    "PyPIRelease",
     "StatsWithGrowth",
     # Utils
     "calculate_growth",

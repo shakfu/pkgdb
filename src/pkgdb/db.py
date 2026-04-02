@@ -6,7 +6,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator
 
-from .types import CategoryDownloads, EnvSummary, PackageStats
+from .types import (
+    CategoryDownloads,
+    EnvSummary,
+    GitHubRelease,
+    PackageStats,
+    PyPIRelease,
+)
 from .utils import calculate_growth
 
 
@@ -111,6 +117,41 @@ def init_db(conn: sqlite3.Connection) -> None:
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_fetch_date
         ON package_stats(fetch_date)
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pypi_releases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            upload_date TEXT NOT NULL,
+            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(package_name, version)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS github_releases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo_key TEXT NOT NULL,
+            tag_name TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(repo_key, tag_name)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS release_cache (
+            cache_key TEXT PRIMARY KEY,
+            fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            expires_at DATETIME NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_pypi_releases_package
+        ON pypi_releases(package_name)
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_github_releases_repo
+        ON github_releases(repo_key)
     """)
     conn.commit()
 
@@ -638,3 +679,144 @@ def get_database_stats(conn: sqlite3.Connection) -> dict[str, Any]:
         "first_fetch": first_fetch,
         "last_fetch": last_fetch,
     }
+
+
+# ---------------------------------------------------------------------------
+# Release data
+# ---------------------------------------------------------------------------
+
+RELEASE_CACHE_TTL_HOURS = 24
+
+
+def _is_release_cache_valid(conn: sqlite3.Connection, cache_key: str) -> bool:
+    """Check if a release cache entry is still valid."""
+    cursor = conn.execute(
+        "SELECT 1 FROM release_cache WHERE cache_key = ? AND expires_at > datetime('now')",
+        (cache_key,),
+    )
+    return cursor.fetchone() is not None
+
+
+def _update_release_cache(
+    conn: sqlite3.Connection, cache_key: str, ttl_hours: int = RELEASE_CACHE_TTL_HOURS
+) -> None:
+    """Update the release cache timestamp."""
+    conn.execute(
+        """INSERT OR REPLACE INTO release_cache (cache_key, fetched_at, expires_at)
+           VALUES (?, datetime('now'), datetime('now', ?))""",
+        (cache_key, f"+{ttl_hours} hours"),
+    )
+
+
+def store_pypi_releases(
+    conn: sqlite3.Connection,
+    package_name: str,
+    releases: list[PyPIRelease],
+) -> None:
+    """Store PyPI release data and update cache timestamp."""
+    for r in releases:
+        conn.execute(
+            """INSERT OR REPLACE INTO pypi_releases
+               (package_name, version, upload_date, fetched_at)
+               VALUES (?, ?, ?, datetime('now'))""",
+            (package_name, r["version"], r["upload_date"]),
+        )
+    _update_release_cache(conn, f"pypi:{package_name}")
+    conn.commit()
+
+
+def get_pypi_releases(
+    conn: sqlite3.Connection, package_name: str
+) -> list[PyPIRelease] | None:
+    """Get cached PyPI releases if cache is valid.
+
+    Returns None if cache has expired or no data exists.
+    """
+    if not _is_release_cache_valid(conn, f"pypi:{package_name}"):
+        return None
+    cursor = conn.execute(
+        """SELECT version, upload_date FROM pypi_releases
+           WHERE package_name = ? ORDER BY upload_date ASC""",
+        (package_name,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+    return [
+        PyPIRelease(version=row["version"], upload_date=row["upload_date"])
+        for row in rows
+    ]
+
+
+def get_all_pypi_releases(
+    conn: sqlite3.Connection, package_name: str
+) -> list[PyPIRelease]:
+    """Get all stored PyPI releases regardless of cache validity."""
+    cursor = conn.execute(
+        """SELECT version, upload_date FROM pypi_releases
+           WHERE package_name = ? ORDER BY upload_date ASC""",
+        (package_name,),
+    )
+    return [
+        PyPIRelease(version=row["version"], upload_date=row["upload_date"])
+        for row in cursor.fetchall()
+    ]
+
+
+def store_github_releases(
+    conn: sqlite3.Connection,
+    repo_key: str,
+    releases: list[GitHubRelease],
+) -> None:
+    """Store GitHub release data and update cache timestamp."""
+    for r in releases:
+        conn.execute(
+            """INSERT OR REPLACE INTO github_releases
+               (repo_key, tag_name, published_at, fetched_at)
+               VALUES (?, ?, ?, datetime('now'))""",
+            (repo_key, r["tag_name"], r["published_at"]),
+        )
+    _update_release_cache(conn, f"github:{repo_key}")
+    conn.commit()
+
+
+def get_github_releases(
+    conn: sqlite3.Connection, repo_key: str
+) -> list[GitHubRelease] | None:
+    """Get cached GitHub releases if cache is valid.
+
+    Returns None if cache has expired or no data exists.
+    """
+    if not _is_release_cache_valid(conn, f"github:{repo_key}"):
+        return None
+    cursor = conn.execute(
+        """SELECT tag_name, published_at FROM github_releases
+           WHERE repo_key = ? ORDER BY published_at ASC""",
+        (repo_key,),
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return None
+    return [
+        GitHubRelease(
+            tag_name=row["tag_name"], published_at=row["published_at"], name=None
+        )
+        for row in rows
+    ]
+
+
+def get_all_github_releases(
+    conn: sqlite3.Connection, repo_key: str
+) -> list[GitHubRelease]:
+    """Get all stored GitHub releases regardless of cache validity."""
+    cursor = conn.execute(
+        """SELECT tag_name, published_at FROM github_releases
+           WHERE repo_key = ? ORDER BY published_at ASC""",
+        (repo_key,),
+    )
+    return [
+        GitHubRelease(
+            tag_name=row["tag_name"], published_at=row["published_at"], name=None
+        )
+        for row in cursor.fetchall()
+    ]

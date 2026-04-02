@@ -9,6 +9,7 @@ from .api import (
     check_package_exists,
     fetch_os_stats,
     fetch_package_stats,
+    fetch_pypi_releases,
     fetch_python_versions,
     fetch_user_packages,
 )
@@ -16,8 +17,11 @@ from .db import (
     add_package,
     cleanup_orphaned_stats,
     get_all_history,
+    get_all_github_releases,
+    get_all_pypi_releases,
     get_database_stats,
     get_db,
+    get_github_releases,
     get_latest_stats,
     get_package_history,
     get_packages,
@@ -26,7 +30,10 @@ from .db import (
     get_cached_python_versions,
     get_next_update_seconds,
     get_packages_needing_update,
+    get_pypi_releases,
     store_env_stats,
+    store_github_releases,
+    store_pypi_releases,
     get_stats_with_growth,
     prune_old_stats,
     record_fetch_attempt,
@@ -38,11 +45,24 @@ from .export import export_csv, export_json, export_markdown
 from .github import (
     RepoResult,
     clear_github_cache,
+    extract_github_url,
+    fetch_github_releases,
     fetch_package_github_stats,
     get_github_cache_stats,
+    parse_github_url,
 )
-from .reports import generate_html_report, generate_package_html_report
-from .types import CategoryDownloads, DatabaseInfo, PackageStats
+from .reports import (
+    generate_html_report,
+    generate_package_html_report,
+    generate_project_html_report,
+)
+from .types import (
+    CategoryDownloads,
+    DatabaseInfo,
+    GitHubRelease,
+    PackageStats,
+    PyPIRelease,
+)
 from .utils import validate_output_path, validate_package_name
 
 
@@ -498,6 +518,116 @@ class PackageStatsService:
             output_file,
             stats=pkg_stats,
             history=history,
+            python_versions=py_versions,
+            os_stats=os_data,
+        )
+
+    def fetch_package_releases(
+        self, package: str
+    ) -> tuple[list[PyPIRelease], list[GitHubRelease]]:
+        """Fetch PyPI and GitHub releases for a package.
+
+        Uses cached data when available (24h TTL).
+
+        Args:
+            package: Package name.
+
+        Returns:
+            Tuple of (pypi_releases, github_releases).
+        """
+        import logging
+
+        logger = logging.getLogger("pkgdb")
+
+        with get_db(self.db_path) as conn:
+            # PyPI releases
+            pypi = get_pypi_releases(conn, package)
+            if pypi is None:
+                fetched = fetch_pypi_releases(package)
+                if fetched:
+                    store_pypi_releases(conn, package, fetched)
+                    pypi = fetched
+                else:
+                    pypi = get_all_pypi_releases(conn, package)
+
+            # GitHub releases
+            gh: list[GitHubRelease] = []
+            github_url = extract_github_url(package)
+            if github_url:
+                parsed = parse_github_url(github_url)
+                if parsed:
+                    owner, repo = parsed
+                    repo_key = f"{owner}/{repo}".lower()
+                    cached_gh = get_github_releases(conn, repo_key)
+                    if cached_gh is not None:
+                        gh = cached_gh
+                    else:
+                        fetched_gh = fetch_github_releases(owner, repo)
+                        if fetched_gh is not None:
+                            gh_typed: list[GitHubRelease] = [
+                                GitHubRelease(
+                                    tag_name=r["tag_name"],
+                                    published_at=r["published_at"],
+                                    name=r.get("name"),
+                                )
+                                for r in fetched_gh
+                            ]
+                            store_github_releases(conn, repo_key, gh_typed)
+                            gh = gh_typed
+                        else:
+                            gh = get_all_github_releases(conn, repo_key)
+            else:
+                logger.debug("No GitHub repository found for %s.", package)
+
+        return pypi, gh
+
+    def generate_project_report(self, package: str, output_file: str) -> bool:
+        """Generate a project view HTML report for a single package.
+
+        Shows download history with release markers, release timeline,
+        and environment distribution.
+
+        Args:
+            package: Package name.
+            output_file: Path to write HTML file.
+
+        Returns:
+            True if report was generated.
+
+        Raises:
+            ValueError: If output path is invalid.
+        """
+        is_valid, error_msg = validate_output_path(
+            output_file, allowed_extensions=[".html", ".htm"]
+        )
+        if not is_valid:
+            raise ValueError(error_msg)
+
+        with get_db(self.db_path) as conn:
+            history = get_package_history(conn, package, limit=90)
+            py_versions = get_cached_python_versions(conn, package)
+            os_data = get_cached_os_stats(conn, package)
+
+        pkg_stats: PackageStats | None = None
+        for h in history:
+            if h["package_name"] == package:
+                pkg_stats = {
+                    "total": h["total"] or 0,
+                    "last_month": h["last_month"] or 0,
+                    "last_week": h["last_week"] or 0,
+                    "last_day": h["last_day"] or 0,
+                }
+                break
+
+        pypi_releases, github_releases = self.fetch_package_releases(package)
+
+        return generate_project_html_report(
+            package,
+            output_file,
+            stats=pkg_stats,
+            history=history,
+            pypi_releases=pypi_releases,
+            github_releases=github_releases,
             python_versions=py_versions,
             os_stats=os_data,
         )

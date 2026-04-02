@@ -7,7 +7,13 @@ from typing import Any
 
 from .api import fetch_os_stats, fetch_python_versions
 from .github import RepoStats
-from .types import CategoryDownloads, EnvSummary, PackageStats
+from .types import (
+    CategoryDownloads,
+    EnvSummary,
+    GitHubRelease,
+    PackageStats,
+    PyPIRelease,
+)
 
 logger = logging.getLogger("pkgdb")
 
@@ -801,4 +807,306 @@ def generate_package_html_report(
     with open(output_file, "w") as f:
         f.write(html)
     logger.info("Report generated: %s", output_file)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Project report with release markers
+# ---------------------------------------------------------------------------
+
+PYPI_MARKER_COLOR = "#4a90a4"
+GITHUB_MARKER_COLOR = "#e67e22"
+
+
+def _make_line_chart_with_markers(
+    dates: list[str],
+    values: list[int],
+    markers: list[dict[str, str]],
+    chart_width: int = 700,
+    chart_height: int = 280,
+    line_color: str = "hsl(200, 70%, 50%)",
+) -> str:
+    """Generate an SVG line chart with vertical release markers.
+
+    Args:
+        dates: List of date strings for x-axis.
+        values: List of values for y-axis.
+        markers: List of dicts with "date", "label", "color" keys.
+        chart_width: Width of the chart in pixels.
+        chart_height: Height of the chart in pixels.
+        line_color: Line color.
+
+    Returns:
+        SVG string, or empty string if insufficient data.
+    """
+    if len(dates) < 2 or len(values) < 2:
+        return ""
+
+    margin = {"top": 40, "right": 20, "bottom": 40, "left": 80}
+    plot_width = chart_width - margin["left"] - margin["right"]
+    plot_height = chart_height - margin["top"] - margin["bottom"]
+    max_val = max(values) or 1
+
+    # Parse date range for marker positioning
+    date_objs = [datetime.strptime(d, "%Y-%m-%d") for d in dates]
+    date_min = date_objs[0]
+    date_range = (date_objs[-1] - date_min).days or 1
+
+    svg_parts = [
+        f'<svg viewBox="0 0 {chart_width} {chart_height}" '
+        f'style="width:100%;max-width:{chart_width}px;height:auto;'
+        f'font-family:system-ui,sans-serif;font-size:11px;">'
+    ]
+
+    # Y-axis labels and grid lines
+    for i in range(5):
+        y_val = max_val * (4 - i) / 4
+        y_pos = margin["top"] + (i * plot_height / 4)
+        svg_parts.append(
+            f'<text x="{margin["left"] - 8}" y="{y_pos + 4}" '
+            f'text-anchor="end" fill="#666">{int(y_val):,}</text>'
+        )
+        svg_parts.append(
+            f'<line x1="{margin["left"]}" y1="{y_pos}" '
+            f'x2="{chart_width - margin["right"]}" y2="{y_pos}" '
+            f'stroke="#eee" stroke-width="1"/>'
+        )
+
+    # X-axis labels
+    for idx in [0, len(dates) // 2, len(dates) - 1]:
+        x_pos = margin["left"] + (idx / (len(dates) - 1)) * plot_width
+        svg_parts.append(
+            f'<text x="{x_pos}" y="{chart_height - 10}" '
+            f'text-anchor="middle" fill="#666">{dates[idx]}</text>'
+        )
+
+    # Release markers (behind the line)
+    for m in markers:
+        try:
+            m_date = datetime.strptime(m["date"], "%Y-%m-%d")
+        except ValueError:
+            continue
+        day_offset = (m_date - date_min).days
+        if day_offset < 0 or day_offset > date_range:
+            continue
+        x = margin["left"] + (day_offset / date_range) * plot_width
+        color = m.get("color", PYPI_MARKER_COLOR)
+        svg_parts.append(
+            f'<line x1="{x:.1f}" y1="{margin["top"]}" '
+            f'x2="{x:.1f}" y2="{margin["top"] + plot_height}" '
+            f'stroke="{color}" stroke-width="1" stroke-dasharray="4,3" opacity="0.6"/>'
+        )
+        label = m.get("label", "")
+        if label:
+            svg_parts.append(
+                f'<text x="{x:.1f}" y="{margin["top"] - 5}" '
+                f'text-anchor="middle" fill="{color}" font-size="9px" '
+                f'transform="rotate(-45 {x:.1f} {margin["top"] - 5})">'
+                f"{label}</text>"
+            )
+
+    # Line
+    points = []
+    for i, val in enumerate(values):
+        x = margin["left"] + (i / max(1, len(values) - 1)) * plot_width
+        y = margin["top"] + plot_height - (val / max_val) * plot_height
+        points.append(f"{x:.1f},{y:.1f}")
+
+    svg_parts.append(
+        f'<polyline points="{" ".join(points)}" '
+        f'fill="none" stroke="{line_color}" stroke-width="2"/>'
+    )
+    svg_parts.append("</svg>")
+
+    return "\n".join(svg_parts)
+
+
+def _build_release_table(
+    pypi_releases: list[PyPIRelease],
+    github_releases: list[GitHubRelease],
+) -> str:
+    """Build an HTML table of releases merged from PyPI and GitHub."""
+    rows: list[tuple[str, str, str]] = []
+    for pr in pypi_releases:
+        rows.append((pr["upload_date"], pr["version"], "PyPI"))
+    for gr in github_releases:
+        rows.append((gr["published_at"], gr["tag_name"], "GitHub"))
+
+    rows.sort(key=lambda x: x[0], reverse=True)
+
+    if not rows:
+        return "<p>No release data available.</p>"
+
+    lines = [
+        '<table class="release-table">',
+        "<tr><th>Date</th><th>Version</th><th>Source</th></tr>",
+    ]
+    for date, version, source in rows:
+        color = PYPI_MARKER_COLOR if source == "PyPI" else GITHUB_MARKER_COLOR
+        lines.append(
+            f"<tr><td>{date}</td><td>{version}</td>"
+            f'<td style="color:{color}">{source}</td></tr>'
+        )
+    lines.append("</table>")
+    return "\n".join(lines)
+
+
+def generate_project_html_report(
+    package: str,
+    output_file: str,
+    stats: PackageStats | None = None,
+    history: list[dict[str, Any]] | None = None,
+    pypi_releases: list[PyPIRelease] | None = None,
+    github_releases: list[GitHubRelease] | None = None,
+    python_versions: list[CategoryDownloads] | None = None,
+    os_stats: list[CategoryDownloads] | None = None,
+) -> bool:
+    """Generate a project view HTML report with release timeline.
+
+    Shows download history with release markers, release table,
+    and environment distribution.
+    """
+    from .api import fetch_package_stats
+
+    logger.info("Generating project report for %s...", package)
+
+    if stats is None:
+        stats = fetch_package_stats(package)
+    if not stats:
+        logger.warning("Could not fetch stats for %s", package)
+        return False
+
+    pypi_releases = pypi_releases or []
+    github_releases = github_releases or []
+
+    # Build env charts
+    if python_versions is None:
+        python_versions = fetch_python_versions(package)
+    if os_stats is None:
+        os_stats = fetch_os_stats(package)
+    py_version_chart, os_chart = _build_env_charts(python_versions, os_stats, size=220)
+
+    # Build chart with markers
+    history_chart = ""
+    if history and len(history) >= 2:
+        sorted_history = sorted(history, key=lambda h: h["fetch_date"])
+        chart_dates = [h["fetch_date"] for h in sorted_history]
+        chart_values = [h["total"] or 0 for h in sorted_history]
+
+        markers: list[dict[str, str]] = []
+        for pr in pypi_releases:
+            markers.append(
+                {
+                    "date": pr["upload_date"],
+                    "label": pr["version"],
+                    "color": PYPI_MARKER_COLOR,
+                }
+            )
+        for gr in github_releases:
+            markers.append(
+                {
+                    "date": gr["published_at"],
+                    "label": gr["tag_name"],
+                    "color": GITHUB_MARKER_COLOR,
+                }
+            )
+
+        history_chart = _make_line_chart_with_markers(
+            chart_dates, chart_values, markers
+        )
+
+    # Legend
+    legend_parts = [
+        f'<span style="color:{PYPI_MARKER_COLOR}">--- PyPI releases ({len(pypi_releases)})</span>'
+    ]
+    if github_releases:
+        legend_parts.append(
+            f'<span style="color:{GITHUB_MARKER_COLOR}">--- GitHub releases ({len(github_releases)})</span>'
+        )
+    legend_html = " &nbsp;&nbsp; ".join(legend_parts)
+
+    # Release table
+    release_table = _build_release_table(pypi_releases, github_releases)
+
+    # Project report styles (extend base)
+    extra_styles = """
+        .release-table { border-collapse: collapse; width: 100%; }
+        .release-table th, .release-table td {
+            padding: 6px 12px; text-align: left; border-bottom: 1px solid #eee;
+        }
+        .release-table th { font-weight: 600; border-bottom: 2px solid #ddd; }
+        .chart-legend { margin: 8px 0 0 80px; font-size: 13px; }
+        .chart-legend span { margin-right: 16px; }
+    """
+
+    body_content = f"""    <h1>{package} - Project View</h1>
+    <p>
+        <a href="https://pypi.org/project/{package}/">PyPI</a>
+        &nbsp;|&nbsp; {len(pypi_releases)} PyPI releases
+        {
+        f"&nbsp;|&nbsp; {len(github_releases)} GitHub releases"
+        if github_releases
+        else ""
+    }
+    </p>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-value">{stats["total"]:,}</div>
+            <div class="stat-label">Total Downloads</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{stats["last_month"]:,}</div>
+            <div class="stat-label">Last Month</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{stats["last_week"]:,}</div>
+            <div class="stat-label">Last Week</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-value">{stats["last_day"]:,}</div>
+            <div class="stat-label">Last Day</div>
+        </div>
+    </div>
+
+    {
+        f'''<div class="chart-container">
+        <h2>Downloads & Releases</h2>
+        {history_chart}
+        <div class="chart-legend">{legend_html}</div>
+    </div>'''
+        if history_chart
+        else ""
+    }
+
+    <div class="chart-container">
+        <h2>Release History</h2>
+        {release_table}
+    </div>
+
+    <div class="chart-container">
+        <h2>Environment Distribution</h2>
+        <div class="pie-charts-row">
+            {
+        f'<div class="pie-chart-wrapper"><h3>Python Versions</h3>{py_version_chart}</div>'
+        if py_version_chart
+        else "<p>Python version data not available</p>"
+    }
+            {
+        f'<div class="pie-chart-wrapper"><h3>Operating Systems</h3>{os_chart}</div>'
+        if os_chart
+        else "<p>OS data not available</p>"
+    }
+        </div>
+    </div>
+"""
+
+    styles = _get_common_styles() + extra_styles
+    html = _render_html_document(
+        f"{package} - Project View", body_content, styles=styles
+    )
+
+    with open(output_file, "w") as f:
+        f.write(html)
+    logger.info("Project report generated: %s", output_file)
     return True

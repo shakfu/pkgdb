@@ -406,3 +406,59 @@ def fetch_package_github_stats(
         return RepoResult(package_name=package_name, repo_url=github_url, error=error)
     except (URLError, TimeoutError, OSError) as e:
         return RepoResult(package_name=package_name, repo_url=github_url, error=str(e))
+
+
+def fetch_github_releases(owner: str, repo: str) -> list[dict[str, Any]] | None:
+    """Fetch release list from the GitHub Releases API.
+
+    Args:
+        owner: Repository owner.
+        repo: Repository name.
+
+    Returns:
+        List of release dicts with tag_name, published_at, and name,
+        sorted by published_at ascending. Returns None on API error,
+        or an empty list if the repo has no releases.
+    """
+    token = get_github_token()
+    headers = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "pkgdb",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    url = f"{GITHUB_API}/repos/{owner}/{repo}/releases?per_page=100"
+    try:
+        req = Request(url, headers=headers)
+        with urlopen(req, timeout=30) as response:
+            data = json.loads(response.read().decode())
+    except HTTPError as e:
+        if e.code == 404:
+            return []
+        logger.warning(
+            "Error fetching GitHub releases for %s/%s: HTTP %d", owner, repo, e.code
+        )
+        return None
+    except (URLError, TimeoutError, OSError) as e:
+        logger.warning("Error fetching GitHub releases for %s/%s: %s", owner, repo, e)
+        return None
+
+    if not isinstance(data, list):
+        return []
+
+    releases = []
+    for r in data:
+        published_at = r.get("published_at")
+        if not published_at or r.get("draft"):
+            continue
+        releases.append(
+            {
+                "tag_name": r.get("tag_name", ""),
+                "published_at": published_at[:10],  # YYYY-MM-DD
+                "name": r.get("name"),
+            }
+        )
+
+    releases.sort(key=lambda x: x["published_at"])
+    return releases
