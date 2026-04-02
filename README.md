@@ -4,6 +4,8 @@ Track, store, and analyze PyPI package download statistics.
 
 Fetches download stats via the pypistats API, stores historical data in SQLite, and generates HTML reports with charts.
 
+[Documentation](https://shakfu.github.io/pkgdb/)
+
 ## Installation
 
 ```sh
