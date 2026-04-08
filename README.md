@@ -174,6 +174,12 @@ pkgdb github cache
 # Clear expired GitHub cache entries (or --all for everything)
 pkgdb github clear
 
+# Launch interactive web dashboard (opens browser)
+pkgdb serve
+
+# Serve on a custom port without opening browser
+pkgdb serve --port 3000 --no-browser
+
 # Fetch stats and generate report in one step
 # (skips packages already fetched in the last 24 hours)
 pkgdb update
@@ -279,6 +285,7 @@ Modular CLI application with the following commands:
 - **report**: Generate HTML report with SVG charts. With `-e` flag, includes Python/OS summary. With `-g` flag, includes GitHub stats (stars, forks, language, activity) in the table. With package argument, generates detailed single-package report. With `-p/--project` flag, generates project view with release timeline overlay
 - **badge**: Generate shields.io-style SVG badge for a package
 - **update**: Run fetch then report in one step (supports `-e` for environment summary, `-g` for GitHub stats)
+- **serve**: Launch interactive web dashboard with live data from SQLite. Overview with sortable/filterable stats table, package detail with zoomable charts and release markers, comparison with multi-package overlay
 
 **Maintenance:**
 - **cleanup**: Remove orphaned stats and optionally prune old data
@@ -342,6 +349,8 @@ Source modules in `src/pkgdb/`:
 - `db.py`: Database operations and context manager
 - `api.py`: pypistats API wrapper with parallel fetching
 - `reports.py`: HTML/SVG report generation
+- `server.py`: HTTP server for the interactive web dashboard
+- `dashboard.py`: HTML page templates for the dashboard (overview, detail, comparison)
 - `github.py`: GitHub API client with caching and rate limit handling
 - `badges.py`: SVG badge generation
 - `export.py`: CSV/JSON/Markdown export

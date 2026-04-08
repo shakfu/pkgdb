@@ -115,7 +115,8 @@ def cmd_fetch(args: argparse.Namespace) -> None:
                 f"{stats['last_day']:,}",
             )
 
-    result = service.fetch_all_stats(progress_callback=on_progress)
+    delay = getattr(args, "delay", 1.0)
+    result = service.fetch_all_stats(progress_callback=on_progress, delay=delay)
 
     if result.skipped > 0:
         logger.info(
@@ -188,6 +189,19 @@ def cmd_update(args: argparse.Namespace) -> None:
     """Sync command: fetch stats then generate report."""
     cmd_fetch(args)
     cmd_report(args)
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    """Serve command: launch interactive web dashboard."""
+    from .server import start_server
+
+    port = getattr(args, "port", 8080)
+    no_browser = getattr(args, "no_browser", False)
+    start_server(
+        db_path=args.database,
+        port=port,
+        open_browser=not no_browser,
+    )
 
 
 def _format_size(size_bytes: int) -> str:
@@ -1158,6 +1172,12 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also fetch GitHub repository stats (stars, forks, etc.)",
     )
+    fetch_parser.add_argument(
+        "--delay",
+        type=float,
+        default=1.0,
+        help="Delay in seconds between API requests per package (default: 1.0)",
+    )
     fetch_parser.set_defaults(func=cmd_fetch)
 
     # show command (was 'list')
@@ -1389,7 +1409,31 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also fetch GitHub repository stats (stars, forks, etc.)",
     )
+    update_parser.add_argument(
+        "--delay",
+        type=float,
+        default=1.0,
+        help="Delay in seconds between API requests per package (default: 1.0)",
+    )
     update_parser.set_defaults(func=cmd_update)
+
+    # serve command
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="Launch interactive web dashboard",
+    )
+    serve_parser.add_argument(
+        "--port",
+        type=int,
+        default=8080,
+        help="Port to serve on (default: 8080)",
+    )
+    serve_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Don't open browser automatically",
+    )
+    serve_parser.set_defaults(func=cmd_serve)
 
     # cleanup command
     cleanup_parser = subparsers.add_parser(

@@ -5,7 +5,7 @@ Feature ideas for pkgdb, ordered by priority.
 ## High Priority
 
 ### Local Interactive Dashboard
-- [ ] `pkgdb serve` - launch a local web dashboard for browsing package stats
+- [x] `pkgdb serve` - launch a local web dashboard for browsing package stats
   - Use stdlib `http.server` for the web server (no Flask/FastAPI dependency)
   - Bundle lightweight JavaScript libraries in the package for interactivity (e.g., Chart.js or similar for zoomable/pannable charts, sortable tables, filtering)
   - Dashboard pages:

@@ -1,5 +1,6 @@
 """Service layer for pkgdb - provides a clean abstraction over database and API operations."""
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -64,6 +65,9 @@ from .types import (
     PyPIRelease,
 )
 from .utils import validate_output_path, validate_package_name
+
+# Delay in seconds between fetching each package to avoid hitting API rate limits
+_FETCH_DELAY_SECONDS = 1.0
 
 
 @dataclass
@@ -297,6 +301,7 @@ class PackageStatsService:
         self,
         progress_callback: Callable[[int, int, str, PackageStats | None], None]
         | None = None,
+        delay: float = _FETCH_DELAY_SECONDS,
     ) -> FetchResult:
         """Fetch and store stats for all tracked packages.
 
@@ -332,6 +337,10 @@ class PackageStatsService:
             failed = 0
 
             for i, package in enumerate(packages_to_fetch, 1):
+                # Throttle requests to avoid HTTP 429 from pypistats API
+                if i > 1 and delay > 0:
+                    time.sleep(delay)
+
                 stats = fetch_package_stats(package)
                 results[package] = stats
 
@@ -417,6 +426,23 @@ class PackageStatsService:
         """
         with get_db(self.db_path) as conn:
             return get_all_history(conn, limit_per_package=limit_per_package)
+
+    def get_env_data(
+        self, package: str
+    ) -> tuple[list[CategoryDownloads] | None, list[CategoryDownloads] | None]:
+        """Get cached environment breakdown for a package.
+
+        Args:
+            package: Package name.
+
+        Returns:
+            Tuple of (python_versions, os_stats), either may be None.
+        """
+        with get_db(self.db_path) as conn:
+            return (
+                get_cached_python_versions(conn, package),
+                get_cached_os_stats(conn, package),
+            )
 
     # -------------------------------------------------------------------------
     # Reporting

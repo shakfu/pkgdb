@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12]
+
+### Added
+
+- `serve` command: launch a local interactive web dashboard for browsing package stats
+  - `pkgdb serve` starts a local HTTP server (stdlib `http.server`, no Flask/FastAPI dependency)
+  - Overview page: sortable/filterable table of all tracked packages with growth metrics, click any package to drill down
+  - Package detail page: zoomable download history chart (uPlot), release date markers with toggles for PyPI/GitHub sources, ranked horizontal bar charts for Python version and OS breakdown
+  - Comparison page: select multiple packages and overlay their download trends on a single chart
+  - Live data from SQLite database on each request
+  - `--port` flag for custom port (default: 8080)
+  - `--no-browser` flag to suppress auto-open
+  - uPlot charting library (~40KB) bundled as a package static asset (no CDN dependency)
+- `--delay` option for `fetch` and `update` commands to throttle API requests and avoid HTTP 429 rate-limit errors from pypistats (default: 1.0 second between packages, use `--delay 0` to disable)
+
 ## [0.1.11]
 
 ### Added
