@@ -1,8 +1,8 @@
 # pkgdb
 
-Track, store, and analyze PyPI package download statistics.
+A tool designed to monitor, collect, and analyze download statistics for PyPI packages, along with GitHub metrics for Python projects.
 
-Fetches download stats via the pypistats API, stores historical data in SQLite, and generates HTML reports with charts.
+It retrieves data through the pypistats and GitHub APIs, storing it as historical records in a SQLite database. The data can then be analyzed and presented either as static HTML reports with visual charts or through an interactive local web interface.
 
 [Documentation](https://shakfu.github.io/pkgdb/)
 
