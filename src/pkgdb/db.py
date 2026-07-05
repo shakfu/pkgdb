@@ -8,12 +8,13 @@ from typing import Any, Generator
 
 from .types import (
     CategoryDownloads,
+    DailyDownload,
     EnvSummary,
     GitHubRelease,
     PackageStats,
     PyPIRelease,
 )
-from .utils import calculate_growth
+from .utils import calculate_growth, daily_window_sums
 
 
 def get_config_dir() -> Path:
@@ -146,12 +147,56 @@ def init_db(conn: sqlite3.Connection) -> None:
         )
     """)
     conn.execute("""
+        CREATE TABLE IF NOT EXISTS daily_downloads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            date TEXT NOT NULL,
+            dimension TEXT NOT NULL,
+            category TEXT NOT NULL,
+            downloads INTEGER NOT NULL,
+            UNIQUE(package_name, date, dimension, category)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_daily_downloads_lookup
+        ON daily_downloads(package_name, dimension, date)
+    """)
+    conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_pypi_releases_package
         ON pypi_releases(package_name)
     """)
     conn.execute("""
         CREATE INDEX IF NOT EXISTS idx_github_releases_repo
         ON github_releases(repo_key)
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS github_stats_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            repo_key TEXT NOT NULL,
+            date TEXT NOT NULL,
+            stars INTEGER NOT NULL,
+            forks INTEGER NOT NULL,
+            open_issues INTEGER NOT NULL,
+            watchers INTEGER NOT NULL,
+            UNIQUE(package_name, date)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_github_stats_history_package
+        ON github_stats_history(package_name, date)
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS package_tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            package_name TEXT NOT NULL,
+            tag TEXT NOT NULL,
+            UNIQUE(package_name, tag)
+        )
+    """)
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_package_tags_tag
+        ON package_tags(tag)
     """)
     conn.commit()
 
@@ -187,6 +232,10 @@ def remove_package(conn: sqlite3.Connection, name: str) -> bool:
             "DELETE FROM fetch_attempts WHERE package_name = ?",
             (name,),
         )
+        conn.execute(
+            "DELETE FROM package_tags WHERE package_name = ?",
+            (name,),
+        )
     conn.commit()
     return cursor.rowcount > 0
 
@@ -195,6 +244,69 @@ def get_packages(conn: sqlite3.Connection) -> list[str]:
     """Get list of tracked package names from the database."""
     cursor = conn.execute("SELECT package_name FROM packages ORDER BY package_name")
     return [row["package_name"] for row in cursor.fetchall()]
+
+
+def normalize_tag(tag: str) -> str:
+    """Normalize a tag: trimmed and lowercased for case-insensitive grouping."""
+    return tag.strip().lower()
+
+
+def add_package_tag(conn: sqlite3.Connection, package_name: str, tag: str) -> bool:
+    """Tag a package for grouping.
+
+    Returns True if the tag was added, False if it was empty or already present.
+    """
+    normalized = normalize_tag(tag)
+    if not normalized:
+        return False
+    try:
+        conn.execute(
+            "INSERT INTO package_tags (package_name, tag) VALUES (?, ?)",
+            (package_name, normalized),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def remove_package_tag(conn: sqlite3.Connection, package_name: str, tag: str) -> bool:
+    """Remove a tag from a package. Returns True if a tag was removed."""
+    cursor = conn.execute(
+        "DELETE FROM package_tags WHERE package_name = ? AND tag = ?",
+        (package_name, normalize_tag(tag)),
+    )
+    conn.commit()
+    return cursor.rowcount > 0
+
+
+def get_package_tags(conn: sqlite3.Connection, package_name: str) -> list[str]:
+    """Get the sorted list of tags for a package."""
+    cursor = conn.execute(
+        "SELECT tag FROM package_tags WHERE package_name = ? ORDER BY tag",
+        (package_name,),
+    )
+    return [row["tag"] for row in cursor.fetchall()]
+
+
+def get_packages_for_tag(conn: sqlite3.Connection, tag: str) -> list[str]:
+    """Get the sorted list of packages carrying a tag."""
+    cursor = conn.execute(
+        "SELECT package_name FROM package_tags WHERE tag = ? ORDER BY package_name",
+        (normalize_tag(tag),),
+    )
+    return [row["package_name"] for row in cursor.fetchall()]
+
+
+def get_tags_map(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """Return a mapping of tag -> sorted list of member package names."""
+    cursor = conn.execute(
+        "SELECT tag, package_name FROM package_tags ORDER BY tag, package_name"
+    )
+    result: dict[str, list[str]] = {}
+    for row in cursor.fetchall():
+        result.setdefault(row["tag"], []).append(row["package_name"])
+    return result
 
 
 def record_fetch_attempt(
@@ -318,6 +430,99 @@ def store_env_stats(
             )
     if commit:
         conn.commit()
+
+
+def store_daily_downloads(
+    conn: sqlite3.Connection,
+    package_name: str,
+    records: list[DailyDownload] | None,
+    commit: bool = True,
+) -> int:
+    """Store a package's daily download time series.
+
+    Each record is upserted on ``(package_name, date, dimension, category)`` so
+    re-fetching an already-captured day overwrites its count rather than
+    duplicating it. This is what lets repeated fetches refine the trailing
+    window while preserving days that have since aged out of the API.
+
+    Args:
+        conn: Database connection.
+        package_name: Name of the package.
+        records: Daily records to store, or None (a no-op).
+        commit: If True, commit the transaction.
+
+    Returns:
+        Number of records written.
+    """
+    if not records:
+        return 0
+    conn.executemany(
+        """
+        INSERT INTO daily_downloads
+            (package_name, date, dimension, category, downloads)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(package_name, date, dimension, category)
+        DO UPDATE SET downloads = excluded.downloads
+        """,
+        [
+            (
+                package_name,
+                rec["date"],
+                rec["dimension"],
+                rec["category"],
+                rec["downloads"],
+            )
+            for rec in records
+        ],
+    )
+    if commit:
+        conn.commit()
+    return len(records)
+
+
+def get_daily_downloads(
+    conn: sqlite3.Connection,
+    package_name: str,
+    dimension: str = "overall",
+    category: str | None = None,
+    since: str | None = None,
+) -> list[DailyDownload]:
+    """Return a package's stored daily download series, ordered by date.
+
+    Args:
+        conn: Database connection.
+        package_name: Name of the package.
+        dimension: One of ``"overall"``, ``"python"``, or ``"os"``.
+        category: Restrict to a single category (e.g. ``"without_mirrors"`` or
+            ``"3.12"``). If None, all categories in the dimension are returned.
+        since: Only include rows on or after this ``YYYY-MM-DD`` date.
+
+    Returns:
+        List of daily records (possibly empty), ordered by date then category.
+    """
+    query = [
+        "SELECT date, dimension, category, downloads FROM daily_downloads",
+        "WHERE package_name = ? AND dimension = ?",
+    ]
+    params: list[Any] = [package_name, dimension]
+    if category is not None:
+        query.append("AND category = ?")
+        params.append(category)
+    if since is not None:
+        query.append("AND date >= ?")
+        params.append(since)
+    query.append("ORDER BY date, category")
+
+    cursor = conn.execute("\n".join(query), params)
+    return [
+        DailyDownload(
+            date=row["date"],
+            dimension=row["dimension"],
+            category=row["category"],
+            downloads=row["downloads"],
+        )
+        for row in cursor.fetchall()
+    ]
 
 
 def get_cached_python_versions(
@@ -566,10 +771,24 @@ def get_stats_with_growth(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
     for s in stats:
         pkg = s["package_name"]
-        # History is sorted ASC by date, reverse for DESC order
+
+        # Prefer exact growth from the true daily series (available from a
+        # single fetch): last 7/30 days vs the 7/30 days before.
+        daily_rows = get_daily_downloads(
+            conn, pkg, dimension="overall", category="without_mirrors"
+        )
+        if daily_rows:
+            series = [(r["date"], r["downloads"]) for r in daily_rows]
+            week = daily_window_sums(series, 7)
+            month = daily_window_sums(series, 30)
+            s["week_growth"] = calculate_growth(week[0], week[1]) if week else None
+            s["month_growth"] = calculate_growth(month[0], month[1]) if month else None
+            continue
+
+        # Fallback for pre-daily databases: compare snapshot rolling windows
+        # across fetches (~7 and ~28 days apart).
         history = list(reversed(all_history.get(pkg, [])))
 
-        # Find stats from ~7 days ago and ~30 days ago
         week_ago = None
         month_ago = None
 
@@ -584,7 +803,6 @@ def get_stats_with_growth(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 month_ago = h
                 break
 
-        # Calculate growth
         s["week_growth"] = calculate_growth(
             s["last_week"], week_ago["last_week"] if week_ago else None
         )
@@ -617,6 +835,18 @@ def cleanup_orphaned_stats(conn: sqlite3.Connection) -> int:
         DELETE FROM fetch_attempts
         WHERE package_name NOT IN (SELECT package_name FROM packages)
     """)
+    conn.execute("""
+        DELETE FROM daily_downloads
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
+    conn.execute("""
+        DELETE FROM github_stats_history
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
+    conn.execute("""
+        DELETE FROM package_tags
+        WHERE package_name NOT IN (SELECT package_name FROM packages)
+    """)
     conn.commit()
     return deleted
 
@@ -645,6 +875,14 @@ def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
     )
     conn.execute(
         "DELETE FROM os_stats WHERE fetch_date < date('now', ?)",
+        (f"-{days} days",),
+    )
+    conn.execute(
+        "DELETE FROM daily_downloads WHERE date < date('now', ?)",
+        (f"-{days} days",),
+    )
+    conn.execute(
+        "DELETE FROM github_stats_history WHERE date < date('now', ?)",
         (f"-{days} days",),
     )
     conn.commit()
@@ -820,3 +1058,70 @@ def get_all_github_releases(
         )
         for row in cursor.fetchall()
     ]
+
+
+# ---------------------------------------------------------------------------
+# GitHub stats history (time series)
+# ---------------------------------------------------------------------------
+
+
+def store_github_stats_snapshot(
+    conn: sqlite3.Connection,
+    package_name: str,
+    repo_key: str,
+    stars: int,
+    forks: int,
+    open_issues: int,
+    watchers: int,
+    commit: bool = True,
+) -> None:
+    """Record a daily snapshot of a package's GitHub repo metrics.
+
+    Upserts on ``(package_name, date)`` so repeated fetches on the same day
+    refresh the day's values rather than duplicating. Unlike download data,
+    GitHub gives no history, so this series accumulates going forward.
+    """
+    date = datetime.now().strftime("%Y-%m-%d")
+    conn.execute(
+        """
+        INSERT INTO github_stats_history
+            (package_name, repo_key, date, stars, forks, open_issues, watchers)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(package_name, date) DO UPDATE SET
+            repo_key = excluded.repo_key,
+            stars = excluded.stars,
+            forks = excluded.forks,
+            open_issues = excluded.open_issues,
+            watchers = excluded.watchers
+        """,
+        (package_name, repo_key, date, stars, forks, open_issues, watchers),
+    )
+    if commit:
+        conn.commit()
+
+
+def get_github_stats_history(
+    conn: sqlite3.Connection, package_name: str, since: str | None = None
+) -> list[dict[str, Any]]:
+    """Return a package's GitHub metric snapshots, ordered by date ascending.
+
+    Args:
+        conn: Database connection.
+        package_name: Name of the package.
+        since: Only include rows on or after this ``YYYY-MM-DD`` date.
+
+    Returns:
+        List of ``{date, stars, forks, open_issues, watchers}`` dicts.
+    """
+    query = [
+        "SELECT date, stars, forks, open_issues, watchers",
+        "FROM github_stats_history WHERE package_name = ?",
+    ]
+    params: list[Any] = [package_name]
+    if since is not None:
+        query.append("AND date >= ?")
+        params.append(since)
+    query.append("ORDER BY date ASC")
+
+    cursor = conn.execute("\n".join(query), params)
+    return [dict(row) for row in cursor.fetchall()]

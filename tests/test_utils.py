@@ -10,12 +10,46 @@ from pkgdb import (
     init_db,
     add_package,
     calculate_growth,
+    daily_window_sums,
     make_sparkline,
     validate_package_name,
     validate_output_path,
     parse_date_arg,
     PackageStatsService,
 )
+
+
+class TestDailyWindowSums:
+    """Tests for daily_window_sums (adjacent calendar-window totals)."""
+
+    def test_two_full_windows(self):
+        # 4 consecutive days, window of 2
+        series = [
+            ("2026-06-01", 10), ("2026-06-02", 20),
+            ("2026-06-03", 30), ("2026-06-04", 40),
+        ]
+        # current = 03+04 = 70, previous = 01+02 = 30 (anchored on max date)
+        assert daily_window_sums(series, 2) == (70, 30)
+
+    def test_missing_dates_count_as_zero(self):
+        # Gap on 06-02; window still anchored by calendar, not row count
+        series = [("2026-06-01", 10), ("2026-06-03", 30), ("2026-06-04", 40)]
+        # anchor 06-04; current(2) = 04+03 = 70; previous(2) = 02+01 = 0+10 = 10
+        assert daily_window_sums(series, 2) == (70, 10)
+
+    def test_single_day_window(self):
+        series = [("2026-06-03", 30), ("2026-06-04", 40)]
+        assert daily_window_sums(series, 1) == (40, 30)
+
+    def test_unordered_input(self):
+        # Order-independent; anchor is the max date (06-04).
+        series = [("2026-06-04", 40), ("2026-06-01", 10), ("2026-06-03", 30)]
+        # current(1) = 06-04 = 40; previous(1) = 06-03 = 30
+        assert daily_window_sums(series, 1) == (40, 30)
+
+    def test_empty_or_invalid(self):
+        assert daily_window_sums([], 7) is None
+        assert daily_window_sums([("2026-06-01", 5)], 0) is None
 
 
 class TestGrowthCalculation:

@@ -7,6 +7,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Added
+
+- Package tags / groups for portfolio organization and rollups
+  - `tag <package> <tag>...` and `untag <package> <tag>... | --all` to manage
+    tags (case-insensitive); `tags` lists every tag with its member count and
+    aggregate `total`/`month`/`week` downloads (a portfolio rollup)
+  - `show --tag <tag>` filters the table to a group and prints a group total
+  - `packages` (and `packages --json`) now show each package's tags
+  - New `package_tags` table; tags are removed with their package and cleaned up
+    by `cleanup`
+  - New database functions `add_package_tag()`, `remove_package_tag()`,
+    `get_package_tags()`, `get_packages_for_tag()`, `get_tags_map()`; service
+    methods `add_tag()`, `remove_tag()`, `get_package_tags()`,
+    `get_tag_summary()`, and a `tag=` filter on `get_stats()`
+- GitHub metrics history: `github` fetches now record a daily snapshot of each
+  repo's stars, forks, open issues, and watchers
+  - New `github_stats_history` table (keyed by `package_name` + `date`,
+    idempotent per day); GitHub exposes no history, so the series accumulates
+    going forward
+  - `github` output gains a "Stars Δ" column (and `star_growth` in `--json`)
+    showing the change in stars over roughly the last 30 days, once at least two
+    snapshots exist
+  - New database functions `store_github_stats_snapshot()` and
+    `get_github_stats_history()`; service methods
+    `PackageStatsService.get_github_history()` and `get_star_growth()`
+  - `cleanup` and `cleanup --days` also cover the new table
+  - The `serve` dashboard package detail page now shows a "GitHub Stars"
+    stars-over-time chart (uPlot) once two or more snapshots exist, fed by a new
+    `GET /api/github-history/<package>` endpoint
+- `check` command: detect download anomalies and milestone crossings (built on
+  the daily series) -- turns passive tracking into actionable alerts
+  - Weekly spike/drop detection: aggregates the daily series into whole weeks
+    (removing day-of-week seasonality) and flags the most recent week when it
+    deviates from its trailing baseline by more than a z-score threshold. Works
+    from a single fetch thanks to the ~180-day backfill
+  - Milestone crossings: reports when a package's tracked download total crosses
+    a configured target (upward only) since the previous fetch
+  - Exits non-zero when any event is found (composes with shell/CI notifiers);
+    `--exit-zero` to always exit 0, `--json` for machine-readable output,
+    `--milestone N` (repeatable) and `-z/--z-threshold` for ad-hoc overrides
+  - New `[check]` config section: `milestones`, `baseline_weeks`, `z_threshold`,
+    `min_weekly`
+  - New module `checks.py` (`weekly_totals`, `detect_anomaly`, `detect_milestones`),
+    service method `PackageStatsService.run_checks()`, and `CheckEvent` type
+  - The example GitHub Actions workflow now runs `pkgdb check` daily, so spikes,
+    drops, and milestones are reported automatically
+- Daily download time-series capture (foundation for true trend analysis)
+  - New `daily_downloads` table stores per-date download counts across three
+    dimensions: `overall` (mirror split), `python` (version), and `os`
+  - `fetch`/`update` now also pull the daily series via pypistats
+    `total="daily"`, so a newly tracked package shows real history from its
+    very first fetch (~180 days backfilled) instead of only from the day
+    tracking began
+  - Idempotent upsert on `(package_name, date, dimension, category)`: re-fetching
+    an already-captured day refreshes its count without duplicating; the local
+    store extends history indefinitely past the ~180-day pypistats window
+  - New API function `fetch_daily_downloads()`; partial-failure tolerant
+    (one failing dimension does not discard the others)
+  - New database functions `store_daily_downloads()` and `get_daily_downloads()`
+    (filterable by dimension, category, and `since` date)
+  - New service method `PackageStatsService.get_daily_downloads()`
+  - New type `DailyDownload`
+  - `cleanup` and `cleanup --days` now also cover the `daily_downloads` table
+
+### Changed
+
+- `history` now renders the true per-day download series when available
+  - `history <package> --text` shows a `Date | Downloads` table of actual daily
+    downloads (`without_mirrors`) instead of the per-fetch rolling snapshot
+  - `history <package> --json` emits `[{"date", "downloads"}]` for the daily
+    series; `--since` filters it by date
+  - The default HTML report chart plots the dense daily curve (titled
+    "Daily Downloads & Releases") with release markers, so a single fetch yields
+    a full ~180-day trend rather than requiring many fetches to accumulate one
+  - Falls back to the previous snapshot progression (per-fetch totals) when no
+    daily data exists, e.g. databases populated before daily capture -- existing
+    output and tests are preserved
+  - New service method `PackageStatsService.get_daily_totals()`
+  - `generate_project_html_report()` gains a `daily_series` parameter
+- `serve` dashboard, `diff`, and growth % now use the daily series
+  - Package detail chart plots the true per-day download series ("Downloads/day")
+    from a single fetch, with release markers; new `GET /api/daily/<package>`
+    endpoint. Falls back to the snapshot daily/weekly/monthly chart when no daily
+    data exists
+  - `diff --period week` / `--period month` compute exact this-period vs
+    last-period download totals from the daily series (works from one fetch),
+    rendered as a `This/Last <period>` table or JSON; `--period latest` still
+    compares the two most recent fetches
+  - Week/month growth % (shown in `show` and dashboard stat cards) computed as
+    exact adjacent-window sums (last 7/30 days vs the prior 7/30) from the daily
+    series, falling back to snapshot deltas for pre-daily databases
+  - New helper `daily_window_sums()` and service method
+    `PackageStatsService.get_period_comparison()`
+
 ## [0.1.12]
 
 ### Added

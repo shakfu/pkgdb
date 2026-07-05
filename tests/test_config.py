@@ -85,6 +85,41 @@ class TestConfig:
         config = load_config(config_path)
         assert config.github is True
         assert config.database is None
+
+    def test_load_config_check_section(self, tmp_path):
+        """load_config reads the [check] section."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "[check]\n"
+            "milestones = [10000, 1000, 1000, 100000]\n"
+            "baseline_weeks = 6\n"
+            "z_threshold = 3.0\n"
+            "min_weekly = 25\n"
+        )
+        config = load_config(config_path)
+        # De-duplicated and sorted
+        assert config.check_milestones == [1000, 10000, 100000]
+        assert config.check_baseline_weeks == 6
+        assert config.check_z_threshold == 3.0
+        assert config.check_min_weekly == 25.0
+
+    def test_load_config_check_ignores_bad_milestones(self, tmp_path):
+        """Non-integer milestone entries are skipped, not fatal."""
+        config_path = tmp_path / "config.toml"
+        config_path.write_text(
+            "[check]\n"
+            'milestones = [1000, "oops", 5000]\n'
+        )
+        config = load_config(config_path)
+        assert config.check_milestones == [1000, 5000]
+
+    def test_load_config_check_defaults(self, tmp_path):
+        """[check] fields fall back to defaults when absent."""
+        config = load_config(tmp_path / "nonexistent.toml")
+        assert config.check_milestones == []
+        assert config.check_baseline_weeks == 8
+        assert config.check_z_threshold == 2.5
+        assert config.check_min_weekly == 10.0
         assert config.environment is False
         assert config.sort_by == "total"
 

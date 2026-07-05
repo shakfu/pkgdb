@@ -895,6 +895,55 @@ class TestGithubCLI:
         assert "test-pkg" in captured.out
         assert "100" in captured.out
 
+    def test_github_fetch_shows_star_growth(self, temp_db, capsys):
+        from datetime import datetime, timedelta
+        from pkgdb import store_github_stats_snapshot
+
+        with get_db(temp_db) as conn:
+            add_package(conn, "test-pkg")
+            # A snapshot ~40 days old at 90 stars
+            old = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+            conn.execute(
+                "INSERT INTO github_stats_history (package_name, repo_key, date, "
+                "stars, forks, open_issues, watchers) VALUES "
+                "('test-pkg', 'test/repo', ?, 90, 5, 1, 1)",
+                (old,),
+            )
+            conn.commit()
+
+        stats = _make_repo_stats(stars=100, forks=10)
+        result = RepoResult(
+            package_name="test-pkg",
+            repo_url="https://github.com/test/repo",
+            stats=stats,
+        )
+        with patch("pkgdb.service.fetch_package_github_stats", return_value=result):
+            with patch("sys.argv", ["pkgdb", "-d", temp_db, "github", "fetch"]):
+                main()
+
+        out = capsys.readouterr().out
+        assert "Stars" in out and "+10" in out  # today 100 vs 40d-ago 90
+
+    def test_github_fetch_json_includes_star_growth(self, temp_db, capsys):
+        with get_db(temp_db) as conn:
+            add_package(conn, "test-pkg")
+
+        stats = _make_repo_stats(stars=100)
+        result = RepoResult(
+            package_name="test-pkg",
+            repo_url="https://github.com/test/repo",
+            stats=stats,
+        )
+        with patch("pkgdb.service.fetch_package_github_stats", return_value=result):
+            # --json is a flag on the parent `github` parser
+            with patch("sys.argv", ["pkgdb", "-d", temp_db, "github", "--json"]):
+                main()
+
+        data = json.loads(capsys.readouterr().out)
+        assert data[0]["package"] == "test-pkg"
+        # Only one snapshot (today) -> growth not yet computable
+        assert data[0]["star_growth"] is None
+
 
 class TestInitCommand:
     """Tests for the init command."""
@@ -1688,6 +1737,247 @@ class TestDiffCommand:
 
         assert "Not enough history for month comparison" in caplog.text
 
+    @staticmethod
+    def _seed_daily(temp_db, package, rows):
+        from pkgdb import store_daily_downloads
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, package)
+        store_daily_downloads(
+            conn, package,
+            [{"date": d, "dimension": "overall",
+              "category": "without_mirrors", "downloads": n} for d, n in rows],
+        )
+        conn.close()
+
+    def test_diff_week_uses_daily_when_available(self, temp_db, capsys):
+        """diff --period week should use exact daily sums when daily data exists."""
+        # 14 days: prior week (01-07) = 7*10=70, current week (08-14) = 7*30=210
+        rows = [(f"2026-06-{i:02d}", 10) for i in range(1, 8)]
+        rows += [(f"2026-06-{i:02d}", 30) for i in range(8, 15)]
+        self._seed_daily(temp_db, "my-pkg", rows)
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "diff", "--period", "week"]):
+            with self._no_config():
+                main()
+        out = capsys.readouterr().out
+        assert "Week-over-Week (daily downloads)" in out
+        assert "This Week" in out and "Last Week" in out
+        assert "210" in out  # current week total
+        assert "70" in out   # previous week total
+
+    def test_diff_week_daily_json(self, temp_db, capsys):
+        """diff --period week --json should emit exact daily period sums."""
+        rows = [(f"2026-06-{i:02d}", 10) for i in range(1, 8)]
+        rows += [(f"2026-06-{i:02d}", 30) for i in range(8, 15)]
+        self._seed_daily(temp_db, "my-pkg", rows)
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "diff",
+                                 "--period", "week", "--json"]):
+            with self._no_config():
+                main()
+        data = json.loads(capsys.readouterr().out)
+        assert data == [
+            {"package": "my-pkg", "period": "week",
+             "current": 210, "previous": 70, "change": 140},
+        ]
+
+    def test_diff_latest_still_uses_snapshots(self, temp_db, capsys):
+        """diff (latest) must remain snapshot-based even with daily data present."""
+        self._setup_history(temp_db)  # snapshot rows for alpha/beta
+        self._seed_daily(temp_db, "alpha-pkg",
+                         [(f"2026-06-{i:02d}", 5) for i in range(1, 15)])
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "diff"]):
+            with self._no_config():
+                main()
+        out = capsys.readouterr().out
+        # Snapshot latest comparison shows the +10,000 total delta and dates
+        assert "+10,000" in out
+        assert "daily downloads" not in out
+
+
+class TestCheckCommand:
+    """Tests for the `check` command (anomaly + milestone detection)."""
+
+    def _no_config(self):
+        return patch("pkgdb.config.get_config_path",
+                     return_value=Path("/nonexistent/config.toml"))
+
+    @staticmethod
+    def _seed_daily(temp_db, package, daily_values, start="2026-01-05"):
+        from datetime import datetime, timedelta
+        from pkgdb import store_daily_downloads
+        d0 = datetime.strptime(start, "%Y-%m-%d").date()
+        rows = [
+            {"date": (d0 + timedelta(days=i)).isoformat(), "dimension": "overall",
+             "category": "without_mirrors", "downloads": v}
+            for i, v in enumerate(daily_values)
+        ]
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, package)
+        store_daily_downloads(conn, package, rows)
+        conn.close()
+
+    def test_check_parser_exists(self):
+        from pkgdb.cli import create_parser
+        args = create_parser().parse_args(["check"])
+        assert args.command == "check"
+
+    def test_check_no_events_exits_zero(self, temp_db, caplog):
+        self._seed_daily(temp_db, "steady", [100] * 63)  # flat -> no anomaly
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "check"]):
+            with self._no_config():
+                main()  # must NOT raise SystemExit
+        assert "No anomalies" in caplog.text
+
+    def test_check_spike_exits_nonzero(self, temp_db, capsys):
+        self._seed_daily(temp_db, "spiky", [100] * 56 + [220] * 7)
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "check"]):
+            with self._no_config():
+                with pytest.raises(SystemExit) as exc:
+                    main()
+        assert exc.value.code == 1
+        out = capsys.readouterr().out
+        assert "spiky" in out
+        assert "SPIKE" in out
+
+    def test_check_exit_zero_flag(self, temp_db):
+        self._seed_daily(temp_db, "spiky", [100] * 56 + [220] * 7)
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "check", "--exit-zero"]):
+            with self._no_config():
+                main()  # must NOT raise despite an event
+
+    def test_check_json_output(self, temp_db, capsys):
+        self._seed_daily(temp_db, "spiky", [100] * 56 + [220] * 7)
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "check", "--json"]):
+            with self._no_config():
+                with pytest.raises(SystemExit):
+                    main()
+        data = json.loads(capsys.readouterr().out)
+        assert len(data) == 1
+        assert data[0]["package"] == "spiky"
+        assert data[0]["kind"] == "spike"
+
+    def test_check_milestone_crossing(self, temp_db, capsys):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "my-pkg")
+        conn.execute(
+            "INSERT INTO package_stats (package_name, fetch_date, last_day, "
+            "last_week, last_month, total) VALUES ('my-pkg', '2026-03-01', 1, 1, 1, 900)"
+        )
+        conn.execute(
+            "INSERT INTO package_stats (package_name, fetch_date, last_day, "
+            "last_week, last_month, total) VALUES ('my-pkg', '2026-04-01', 1, 1, 1, 1100)"
+        )
+        conn.commit()
+        conn.close()
+
+        with patch("sys.argv",
+                   ["pkgdb", "-d", temp_db, "check", "--milestone", "1000", "--json"]):
+            with self._no_config():
+                with pytest.raises(SystemExit) as exc:
+                    main()
+        assert exc.value.code == 1
+        data = json.loads(capsys.readouterr().out)
+        assert data == [{
+            "package": "my-pkg", "kind": "milestone",
+            "milestone": 1000, "total": 1100,
+            "message": "crossed 1,000 downloads (now 1,100)",
+        }]
+
+
+class TestTagCommands:
+    """Tests for tag / untag / tags commands and show --tag."""
+
+    def _no_config(self):
+        return patch("pkgdb.config.get_config_path",
+                     return_value=Path("/nonexistent/config.toml"))
+
+    @staticmethod
+    def _seed(temp_db, packages_with_totals):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        for pkg, total in packages_with_totals:
+            add_package(conn, pkg)
+            store_stats(
+                conn, pkg,
+                {"last_day": 1, "last_week": 7, "last_month": 10, "total": total},
+            )
+        conn.close()
+
+    def test_tag_and_untag(self, temp_db, caplog):
+        self._seed(temp_db, [("a", 100)])
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "tag", "a", "web", "cli"]):
+            with self._no_config():
+                main()
+        assert PackageStatsService(temp_db).get_package_tags("a") == ["cli", "web"]
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "untag", "a", "cli"]):
+            with self._no_config():
+                main()
+        assert PackageStatsService(temp_db).get_package_tags("a") == ["web"]
+
+    def test_untag_all(self, temp_db):
+        self._seed(temp_db, [("a", 100)])
+        svc = PackageStatsService(temp_db)
+        svc.add_tag("a", "web")
+        svc.add_tag("a", "cli")
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "untag", "a", "--all"]):
+            with self._no_config():
+                main()
+        assert svc.get_package_tags("a") == []
+
+    def test_tag_untracked_package_warns(self, temp_db, caplog):
+        self._seed(temp_db, [("a", 100)])
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "tag", "ghost", "web"]):
+            with self._no_config():
+                main()
+        assert "not tracked" in caplog.text
+        assert PackageStatsService(temp_db).get_package_tags("ghost") == []
+
+    def test_tags_rollup_table(self, temp_db, capsys):
+        self._seed(temp_db, [("a", 100), ("b", 250), ("c", 40)])
+        svc = PackageStatsService(temp_db)
+        svc.add_tag("a", "web")
+        svc.add_tag("b", "web")
+        svc.add_tag("c", "cli")
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "tags"]):
+            with self._no_config():
+                main()
+        out = capsys.readouterr().out
+        assert "web" in out
+        assert "350" in out  # aggregated total for web (100 + 250)
+
+    def test_tags_json(self, temp_db, capsys):
+        self._seed(temp_db, [("a", 100), ("b", 250)])
+        svc = PackageStatsService(temp_db)
+        svc.add_tag("a", "web")
+        svc.add_tag("b", "web")
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "tags", "--json"]):
+            with self._no_config():
+                main()
+        data = json.loads(capsys.readouterr().out)
+        assert data[0]["tag"] == "web"
+        assert data[0]["package_count"] == 2
+        assert data[0]["total"] == 350
+        assert set(data[0]["packages"]) == {"a", "b"}
+
+    def test_show_filtered_by_tag(self, temp_db, capsys):
+        self._seed(temp_db, [("a", 100), ("b", 250), ("c", 40)])
+        svc = PackageStatsService(temp_db)
+        svc.add_tag("a", "web")
+        svc.add_tag("b", "web")
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--tag", "web"]):
+            with self._no_config():
+                main()
+        out = capsys.readouterr().out
+        assert "a" in out and "b" in out
+        assert "40" not in out  # package c (total 40) is excluded
+        assert "Group 'web' (2 packages)" in out
+
 
 class TestReleasesCommand:
     """Tests for the releases CLI command."""
@@ -1767,3 +2057,124 @@ class TestReleasesCommand:
         args = parser.parse_args(["report", "my-pkg", "--project", "--no-browser"])
         assert args.project is True
         assert args.package == "my-pkg"
+
+
+class TestHistoryDailySeries:
+    """Tests for history rendering the true daily download series (Step 2)."""
+
+    def _no_config(self):
+        return patch("pkgdb.config.get_config_path",
+                     return_value=Path("/nonexistent/config.toml"))
+
+    @staticmethod
+    def _seed_daily(temp_db, package, rows, dimension="overall",
+                    category="without_mirrors"):
+        """Seed daily_downloads rows: rows is a list of (date, downloads)."""
+        from pkgdb import store_daily_downloads
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, package)
+        store_daily_downloads(
+            conn,
+            package,
+            [
+                {"date": d, "dimension": dimension,
+                 "category": category, "downloads": n}
+                for d, n in rows
+            ],
+        )
+        conn.close()
+
+    def test_text_prefers_daily_series(self, temp_db, capsys):
+        """--text should show the per-day series when daily data exists."""
+        self._seed_daily(
+            temp_db, "my-pkg",
+            [("2026-06-01", 100), ("2026-06-02", 120), ("2026-06-03", 90)],
+        )
+        with patch("sys.argv",
+                   ["pkgdb", "-d", temp_db, "history", "my-pkg", "--text"]):
+            with self._no_config():
+                main()
+        out = capsys.readouterr().out
+        assert "Daily downloads for my-pkg" in out
+        assert "Downloads" in out
+        # Per-day figures, not rolling snapshot columns
+        assert "Month" not in out
+        assert "120" in out
+
+    def test_json_prefers_daily_series(self, temp_db, capsys):
+        """--json should emit the per-day series when daily data exists."""
+        self._seed_daily(
+            temp_db, "my-pkg", [("2026-06-01", 100), ("2026-06-02", 120)],
+        )
+        with patch("sys.argv",
+                   ["pkgdb", "-d", temp_db, "history", "my-pkg", "--json"]):
+            with self._no_config():
+                main()
+        data = json.loads(capsys.readouterr().out)
+        assert data == [
+            {"date": "2026-06-01", "downloads": 100},
+            {"date": "2026-06-02", "downloads": 120},
+        ]
+
+    def test_json_filters_daily_by_since(self, temp_db, capsys):
+        """--since should filter the daily series."""
+        self._seed_daily(
+            temp_db, "my-pkg",
+            [("2026-06-01", 100), ("2026-06-05", 120), ("2026-06-10", 90)],
+        )
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "my-pkg",
+                                 "--json", "--since", "2026-06-05"]):
+            with self._no_config():
+                main()
+        data = json.loads(capsys.readouterr().out)
+        assert [r["date"] for r in data] == ["2026-06-05", "2026-06-10"]
+
+    def test_text_falls_back_to_snapshot_without_daily(self, temp_db, capsys):
+        """Without daily data, --text shows the snapshot progression."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "my-pkg")
+        conn.execute(
+            """INSERT INTO package_stats
+               (package_name, fetch_date, last_day, last_week, last_month, total)
+               VALUES ('my-pkg', '2024-01-01', 10, 70, 300, 1000)""",
+        )
+        conn.commit()
+        conn.close()
+        with patch("sys.argv",
+                   ["pkgdb", "-d", temp_db, "history", "my-pkg", "--text"]):
+            with self._no_config():
+                main()
+        out = capsys.readouterr().out
+        assert "Historical stats for my-pkg" in out
+        assert "Month" in out  # snapshot columns
+
+    def test_html_report_uses_daily_chart_title(self, temp_db):
+        """The HTML project report labels the chart 'Daily' when daily data exists."""
+        rows = [(f"2026-06-{d:02d}", 100 + d) for d in range(1, 11)]
+        self._seed_daily(temp_db, "my-pkg", rows)
+        # A snapshot row supplies the stat cards, avoiding a live stats fetch.
+        conn = get_db_connection(temp_db)
+        conn.execute(
+            """INSERT INTO package_stats
+               (package_name, fetch_date, last_day, last_week, last_month, total)
+               VALUES ('my-pkg', '2026-06-10', 110, 700, 3000, 50000)""",
+        )
+        conn.commit()
+        conn.close()
+
+        output = os.path.join(os.path.dirname(temp_db), "daily_report.html")
+        service = PackageStatsService(temp_db)
+        with (
+            patch.object(PackageStatsService, "fetch_package_releases",
+                         return_value=([], [])),
+            patch("pkgdb.reports.fetch_python_versions", return_value=None),
+            patch("pkgdb.reports.fetch_os_stats", return_value=None),
+        ):
+            assert service.generate_project_report("my-pkg", output) is True
+
+        html = Path(output).read_text()
+        assert "Daily Downloads &amp; Releases" in html or \
+               "Daily Downloads & Releases" in html
+        Path(output).unlink(missing_ok=True)

@@ -149,6 +149,157 @@ class TestPackageStatsService:
         assert progress_calls[0][1] == 1  # total
         assert progress_calls[0][2] == "test-pkg"  # package
 
+    def test_fetch_captures_daily_series(self, temp_db):
+        """fetch_all_stats should persist the daily time series when available."""
+        service = PackageStatsService(temp_db)
+        service.add_package("test-pkg", verify=False)
+
+        recent = json.dumps(
+            {"data": {"last_day": 10, "last_week": 70, "last_month": 300}}
+        )
+        # overall is called twice: aggregate (no total) and daily (total='daily').
+        overall_daily = json.dumps(
+            {
+                "data": [
+                    {"category": "without_mirrors", "date": "2026-01-01", "downloads": 100},
+                    {"category": "without_mirrors", "date": "2026-01-02", "downloads": 150},
+                ]
+            }
+        )
+        overall_agg = json.dumps(
+            {"data": [{"category": "without_mirrors", "downloads": 250}]}
+        )
+
+        def overall_side_effect(pkg, *args, **kwargs):
+            return overall_daily if kwargs.get("total") == "daily" else overall_agg
+
+        py_daily = json.dumps(
+            {"data": [{"category": "3.12", "date": "2026-01-01", "downloads": 40}]}
+        )
+        os_daily = json.dumps(
+            {"data": [{"category": "Linux", "date": "2026-01-01", "downloads": 80}]}
+        )
+
+        def py_side_effect(pkg, *args, **kwargs):
+            return py_daily
+
+        def os_side_effect(pkg, *args, **kwargs):
+            return os_daily
+
+        with (
+            patch("pkgdb.api.pypistats.recent", return_value=recent),
+            patch("pkgdb.api.pypistats.overall", side_effect=overall_side_effect),
+            patch("pkgdb.api.pypistats.python_minor", side_effect=py_side_effect),
+            patch("pkgdb.api.pypistats.system", side_effect=os_side_effect),
+        ):
+            result = service.fetch_all_stats()
+
+        assert result.success == 1
+
+        overall = service.get_daily_downloads("test-pkg", dimension="overall")
+        assert [r["date"] for r in overall] == ["2026-01-01", "2026-01-02"]
+        assert [r["downloads"] for r in overall] == [100, 150]
+
+        python = service.get_daily_downloads("test-pkg", dimension="python")
+        assert len(python) == 1 and python[0]["category"] == "3.12"
+
+    def test_get_period_comparison_from_daily(self, temp_db):
+        """get_period_comparison returns exact adjacent-window sums."""
+        from pkgdb import store_daily_downloads
+
+        service = PackageStatsService(temp_db)
+        service.add_package("my-pkg", verify=False)
+        rows = [{"date": f"2026-06-{i:02d}", "dimension": "overall",
+                 "category": "without_mirrors", "downloads": 10}
+                for i in range(1, 8)]
+        rows += [{"date": f"2026-06-{i:02d}", "dimension": "overall",
+                  "category": "without_mirrors", "downloads": 25}
+                 for i in range(8, 15)]
+        with get_db(temp_db) as conn:
+            store_daily_downloads(conn, "my-pkg", rows)
+
+        # current week (08-14) = 7*25 = 175, previous (01-07) = 7*10 = 70
+        assert service.get_period_comparison("my-pkg", 7) == (175, 70)
+
+    def test_get_period_comparison_no_daily_returns_none(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("my-pkg", verify=False)
+        assert service.get_period_comparison("my-pkg", 7) is None
+
+    def test_run_checks_detects_spike(self, temp_db):
+        from datetime import datetime, timedelta
+        from pkgdb import store_daily_downloads
+
+        service = PackageStatsService(temp_db)
+        service.add_package("spiky", verify=False)
+        d0 = datetime.strptime("2026-01-05", "%Y-%m-%d").date()
+        values = [100] * 56 + [220] * 7
+        rows = [
+            {"date": (d0 + timedelta(days=i)).isoformat(), "dimension": "overall",
+             "category": "without_mirrors", "downloads": v}
+            for i, v in enumerate(values)
+        ]
+        with get_db(temp_db) as conn:
+            store_daily_downloads(conn, "spiky", rows)
+
+        events = service.run_checks()
+        assert len(events) == 1
+        assert events[0]["package"] == "spiky"
+        assert events[0]["kind"] == "spike"
+
+    def test_run_checks_empty_without_data(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("quiet", verify=False)
+        assert service.run_checks(milestones=[1000]) == []
+
+    def test_tag_add_remove_and_list(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("a", verify=False)
+        assert service.add_tag("a", "Web") is True
+        assert service.get_package_tags("a") == ["web"]
+        assert service.remove_tag("a", "web") is True
+        assert service.get_package_tags("a") == []
+
+    def test_get_stats_filtered_by_tag(self, temp_db):
+        service = PackageStatsService(temp_db)
+        for p in ("a", "b", "c"):
+            service.add_package(p, verify=False)
+            store_stats(
+                self._conn(temp_db), p,
+                {"last_day": 1, "last_week": 7, "last_month": 30, "total": 100},
+            )
+        service.add_tag("a", "web")
+        service.add_tag("b", "web")
+        names = {s["package_name"] for s in service.get_stats(tag="web")}
+        assert names == {"a", "b"}
+
+    def test_get_tag_summary_aggregates(self, temp_db):
+        service = PackageStatsService(temp_db)
+        conn = self._conn(temp_db)
+        for p, total in (("a", 100), ("b", 250), ("c", 40)):
+            service.add_package(p, verify=False)
+            store_stats(
+                conn, p,
+                {"last_day": 1, "last_week": 7, "last_month": 10, "total": total},
+            )
+        service.add_tag("a", "web")
+        service.add_tag("b", "web")
+        service.add_tag("c", "cli")
+
+        summary = {e["tag"]: e for e in service.get_tag_summary()}
+        assert summary["web"]["package_count"] == 2
+        assert summary["web"]["total"] == 350
+        assert summary["cli"]["total"] == 40
+        # Ordered by total desc -> web first
+        assert service.get_tag_summary()[0]["tag"] == "web"
+
+    @staticmethod
+    def _conn(temp_db):
+        from pkgdb import get_db_connection, init_db
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        return conn
+
     def test_service_get_stats(self, temp_db):
         """Service should retrieve stats."""
         service = PackageStatsService(temp_db)
@@ -658,6 +809,52 @@ class TestServiceGithubStats:
         assert len(results) == 1
         assert results[0].success is True
         assert results[0].stats.stars == 200
+
+    def test_fetch_github_stats_records_history(self, temp_db):
+        service = PackageStatsService(temp_db)
+        with get_db(temp_db) as conn:
+            add_package(conn, "test-pkg")
+
+        stats = _make_repo_stats(stars=200, forks=20, open_issues=7, watchers=15)
+        result = RepoResult(
+            package_name="test-pkg",
+            repo_url="https://github.com/test/repo",
+            stats=stats,
+        )
+        with patch("pkgdb.service.fetch_package_github_stats", return_value=result):
+            service.fetch_github_stats(packages=["test-pkg"])
+
+        history = service.get_github_history("test-pkg")
+        assert len(history) == 1
+        assert history[0]["stars"] == 200
+        assert history[0]["forks"] == 20
+
+    def test_get_star_growth(self, temp_db):
+        from pkgdb import store_github_stats_snapshot
+
+        service = PackageStatsService(temp_db)
+        service.add_package("gh-pkg", verify=False)
+        with get_db(temp_db) as conn:
+            conn.executemany(
+                "INSERT INTO github_stats_history (package_name, repo_key, date, "
+                "stars, forks, open_issues, watchers) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    ("gh-pkg", "o/r", "2026-05-01", 100, 1, 1, 1),
+                    ("gh-pkg", "o/r", "2026-06-10", 130, 1, 1, 1),
+                ],
+            )
+            conn.commit()
+        # latest 130 vs baseline >=30 days old (2026-05-01 = 100) -> +30
+        assert service.get_star_growth("gh-pkg", days=30) == 30
+
+    def test_get_star_growth_needs_two_points(self, temp_db):
+        from pkgdb import store_github_stats_snapshot
+
+        service = PackageStatsService(temp_db)
+        service.add_package("gh-pkg", verify=False)
+        with get_db(temp_db) as conn:
+            store_github_stats_snapshot(conn, "gh-pkg", "o/r", 100, 1, 1, 1)
+        assert service.get_star_growth("gh-pkg") is None
 
     def test_clear_github_cache(self, temp_db):
         service = PackageStatsService(temp_db)

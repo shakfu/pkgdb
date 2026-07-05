@@ -199,6 +199,47 @@ def calculate_growth(current: int | None, previous: int | None) -> float | None:
     return ((current - previous) / previous) * 100
 
 
+def daily_window_sums(
+    series: list[tuple[str, int]], days: int
+) -> tuple[int, int] | None:
+    """Sum a daily download series over two adjacent calendar windows.
+
+    Given a per-day series, returns ``(current, previous)`` where ``current`` is
+    the total downloads over the most recent ``days`` calendar days (anchored on
+    the latest date present, inclusive) and ``previous`` is the total over the
+    ``days`` days immediately before that. Missing dates count as zero, so gaps
+    in the series do not shift the windows.
+
+    Unlike snapshot-based deltas, both windows come from a single fetch, so exact
+    week-over-week / month-over-month math is available immediately.
+
+    Args:
+        series: List of ``(YYYY-MM-DD, downloads)`` pairs (any order).
+        days: Width of each window in calendar days (must be >= 1).
+
+    Returns:
+        ``(current, previous)`` sums, or None if the series is empty or
+        ``days < 1``.
+    """
+    if not series or days < 1:
+        return None
+
+    totals: dict[str, int] = {}
+    for date, downloads in series:
+        totals[date] = totals.get(date, 0) + downloads
+
+    anchor = datetime.strptime(max(totals), "%Y-%m-%d").date()
+
+    def window_sum(day_offset: int) -> int:
+        total = 0
+        for i in range(days):
+            day = anchor - timedelta(days=day_offset + i)
+            total += totals.get(day.isoformat(), 0)
+        return total
+
+    return window_sum(0), window_sum(days)
+
+
 def make_sparkline(values: list[int], width: int = SPARKLINE_WIDTH) -> str:
     """Generate an ASCII sparkline from a list of values.
 

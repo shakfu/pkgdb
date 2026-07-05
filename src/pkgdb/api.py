@@ -12,7 +12,13 @@ from urllib.request import Request, urlopen
 import pypistats  # type: ignore[import-untyped]
 import urllib3
 
-from .types import CategoryDownloads, EnvSummary, PackageStats, PyPIRelease
+from .types import (
+    CategoryDownloads,
+    DailyDownload,
+    EnvSummary,
+    PackageStats,
+    PyPIRelease,
+)
 
 logger = logging.getLogger("pkgdb")
 
@@ -138,6 +144,78 @@ def fetch_os_stats(package_name: str) -> list[CategoryDownloads] | None:
     except _API_ERRORS as e:
         logger.warning("Error fetching OS stats for %s: %s", package_name, e)
         return None
+
+
+# Mapping of dimension name to the pypistats function that returns its
+# per-date series. Each is called with ``total="daily"`` to get one row per
+# (category, date) over the trailing ~180 days that pypistats retains.
+_DAILY_DIMENSIONS: dict[str, str] = {
+    "overall": "overall",
+    "python": "python_minor",
+    "os": "system",
+}
+
+
+def _fetch_daily_dimension(
+    package_name: str, dimension: str, func_name: str
+) -> list[DailyDownload]:
+    """Fetch the daily download series for one dimension of one package.
+
+    Returns an empty list on any API error (logged as a warning) so a failure
+    in one dimension does not discard the others.
+    """
+    func = getattr(pypistats, func_name)
+    try:
+        result = func(package_name, total="daily", format="json")
+        data = json.loads(result).get("data", [])
+    except _API_ERRORS as e:
+        logger.warning(
+            "Error fetching daily %s series for %s: %s", dimension, package_name, e
+        )
+        return []
+
+    records: list[DailyDownload] = []
+    for item in data:
+        date = item.get("date")
+        category = item.get("category")
+        if not date or category is None:
+            continue
+        records.append(
+            DailyDownload(
+                date=date,
+                dimension=dimension,
+                category=str(category),
+                downloads=int(item.get("downloads", 0)),
+            )
+        )
+    return records
+
+
+def fetch_daily_downloads(package_name: str) -> list[DailyDownload] | None:
+    """Fetch the full daily download time series for a package.
+
+    Combines the ``overall`` (mirror split), ``python`` (version), and ``os``
+    dimensions, each as a per-date series over the trailing ~180 days that
+    pypistats retains. This is what lets a package show real history on its
+    very first fetch rather than only from the day tracking began.
+
+    Returns:
+        A combined list of daily records across all dimensions, or None if
+        every dimension failed (e.g. the package is unknown or the API is
+        unreachable). Partial results are returned when only some dimensions
+        fail.
+    """
+    records: list[DailyDownload] = []
+    any_success = False
+    for dimension, func_name in _DAILY_DIMENSIONS.items():
+        dim_records = _fetch_daily_dimension(package_name, dimension, func_name)
+        if dim_records:
+            any_success = True
+            records.extend(dim_records)
+
+    if not any_success:
+        return None
+    return records
 
 
 def aggregate_env_stats(

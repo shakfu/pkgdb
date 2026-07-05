@@ -9,6 +9,7 @@ from .api import fetch_os_stats, fetch_python_versions
 from .github import RepoStats
 from .types import (
     CategoryDownloads,
+    DailyDownload,
     EnvSummary,
     GitHubRelease,
     PackageStats,
@@ -956,6 +957,7 @@ def generate_project_html_report(
     output_file: str,
     stats: PackageStats | None = None,
     history: list[dict[str, Any]] | None = None,
+    daily_series: list[DailyDownload] | None = None,
     pypi_releases: list[PyPIRelease] | None = None,
     github_releases: list[GitHubRelease] | None = None,
     python_versions: list[CategoryDownloads] | None = None,
@@ -965,6 +967,11 @@ def generate_project_html_report(
 
     Shows download history with release markers, release table,
     and environment distribution.
+
+    When ``daily_series`` is provided (the true per-day download counts) it is
+    used for the trend chart, giving a dense ~180-day curve even from a single
+    fetch. It falls back to the snapshot ``history`` (per-fetch totals) when no
+    daily data is available, e.g. for databases populated before daily capture.
     """
     from .api import fetch_package_stats
 
@@ -986,13 +993,23 @@ def generate_project_html_report(
         os_stats = fetch_os_stats(package)
     py_version_chart, os_chart = _build_env_charts(python_versions, os_stats, size=220)
 
-    # Build chart with markers
+    # Build chart with markers. Prefer the true daily download series (dense,
+    # available from a single fetch); fall back to the snapshot totals.
     history_chart = ""
-    if history and len(history) >= 2:
+    chart_dates: list[str] = []
+    chart_values: list[int] = []
+    chart_title = "Downloads & Releases"
+    if daily_series and len(daily_series) >= 2:
+        sorted_daily = sorted(daily_series, key=lambda d: d["date"])
+        chart_dates = [d["date"] for d in sorted_daily]
+        chart_values = [d["downloads"] for d in sorted_daily]
+        chart_title = "Daily Downloads & Releases"
+    elif history and len(history) >= 2:
         sorted_history = sorted(history, key=lambda h: h["fetch_date"])
         chart_dates = [h["fetch_date"] for h in sorted_history]
         chart_values = [h["total"] or 0 for h in sorted_history]
 
+    if len(chart_dates) >= 2:
         markers: list[dict[str, str]] = []
         for pr in pypi_releases:
             markers.append(
@@ -1071,7 +1088,7 @@ def generate_project_html_report(
 
     {
         f'''<div class="chart-container">
-        <h2>Downloads & Releases</h2>
+        <h2>{chart_title}</h2>
         {history_chart}
         <div class="chart-legend">{legend_html}</div>
     </div>'''

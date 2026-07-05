@@ -55,6 +55,18 @@ jobs:
       - name: Generate report
         run: pkgdb report --no-browser -o report.html
 
+      - name: Check for download anomalies and milestones (optional)
+        # `pkgdb check` exits non-zero when a weekly spike/drop or a configured
+        # milestone crossing is detected. Because the daily series is backfilled
+        # (~180 days) on the first fetch, anomaly detection works immediately.
+        # Remove `|| true` to fail the run (and get a red X / notification) on any
+        # event, or pipe the JSON to a notifier (Slack, email, an issue, ...).
+        run: |
+          pkgdb check --json > events.json || true
+          cat events.json
+          # Example: fail the job (and trigger GitHub's failure notification) on events
+          # pkgdb check
+
       - name: Generate badges (optional)
         run: |
           mkdir -p badges

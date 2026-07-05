@@ -103,10 +103,14 @@ class TestDashboardPages:
     def test_package_page_structure(self):
         html = generate_package_page("my-package")
         assert "my-package" in html
+        assert "/api/daily/" in html
+        assert "/api/github-history/" in html
         assert "/api/history/" in html
         assert "/api/env/" in html
         assert "/api/releases/" in html
         assert "history-chart" in html
+        assert "github-chart" in html
+        assert "renderGithubChart" in html
         assert "py-bars" in html
         assert "os-bars" in html
 
@@ -261,6 +265,54 @@ class TestApiEndpoints:
         resp = urlopen(f"{server_url}/api/history/nonexistent-pkg")
         data = json.loads(resp.read())
         assert data == []
+
+    def test_api_daily_series(self, populated_db, server_url):
+        from pkgdb.db import store_daily_downloads
+
+        with get_db(populated_db) as conn:
+            store_daily_downloads(conn, "alpha-pkg", [
+                {"date": "2026-06-01", "dimension": "overall",
+                 "category": "without_mirrors", "downloads": 10},
+                {"date": "2026-06-02", "dimension": "overall",
+                 "category": "without_mirrors", "downloads": 20},
+                # A python-dimension row must NOT appear in the overall series
+                {"date": "2026-06-01", "dimension": "python",
+                 "category": "3.12", "downloads": 5},
+            ])
+        resp = urlopen(f"{server_url}/api/daily/alpha-pkg")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert data == [
+            {"date": "2026-06-01", "downloads": 10},
+            {"date": "2026-06-02", "downloads": 20},
+        ]
+
+    def test_api_daily_nonexistent(self, server_url):
+        resp = urlopen(f"{server_url}/api/daily/nonexistent-pkg")
+        data = json.loads(resp.read())
+        assert data == []
+
+    def test_api_github_history(self, populated_db, server_url):
+        from pkgdb.db import store_github_stats_snapshot
+
+        with get_db(populated_db) as conn:
+            conn.executemany(
+                "INSERT INTO github_stats_history (package_name, repo_key, date, "
+                "stars, forks, open_issues, watchers) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    ("alpha-pkg", "o/r", "2026-06-01", 100, 5, 1, 1),
+                    ("alpha-pkg", "o/r", "2026-06-02", 108, 5, 1, 1),
+                ],
+            )
+            conn.commit()
+        resp = urlopen(f"{server_url}/api/github-history/alpha-pkg")
+        assert resp.status == 200
+        data = json.loads(resp.read())
+        assert [d["stars"] for d in data] == [100, 108]
+
+    def test_api_github_history_empty(self, server_url):
+        resp = urlopen(f"{server_url}/api/github-history/nonexistent-pkg")
+        assert json.loads(resp.read()) == []
 
     def test_api_env(self, server_url):
         resp = urlopen(f"{server_url}/api/env/alpha-pkg")

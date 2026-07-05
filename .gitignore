@@ -11,6 +11,7 @@ wheels/
 .cache
 .coverage
 htmlcov/
+REVIEW.md
 
 # Virtual environments
 .venv

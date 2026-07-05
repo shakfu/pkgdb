@@ -232,10 +232,14 @@ def cmd_show(args: argparse.Namespace) -> None:
             print("  Date range:  (no data)")
         return
 
-    stats = service.get_stats(with_growth=True)
+    tag = getattr(args, "tag", None)
+    stats = service.get_stats(with_growth=True, tag=tag)
 
     if not stats:
-        logger.warning("No data in database. Run 'fetch' first.")
+        if tag:
+            logger.warning("No tracked packages with data are tagged '%s'.", tag)
+        else:
+            logger.warning("No data in database. Run 'fetch' first.")
         return
 
     # Sort by specified field
@@ -311,6 +315,16 @@ def cmd_show(args: argparse.Namespace) -> None:
         headers.extend(["Trend", "Growth"])
     print(tabulate(rows, headers=headers, tablefmt="simple"))
 
+    # When filtering to a group, print the aggregate rollup for the tag.
+    if tag:
+        g_total = sum(s.get("total") or 0 for s in stats)
+        g_month = sum(s.get("last_month") or 0 for s in stats)
+        g_week = sum(s.get("last_week") or 0 for s in stats)
+        print(
+            f"\nGroup '{tag}' ({len(stats)} packages): "
+            f"{g_total:,} total, {g_month:,} month, {g_week:,} week"
+        )
+
     # Show next update time
     with get_db(args.database) as conn:
         next_secs = get_next_update_seconds(conn)
@@ -336,18 +350,94 @@ def _format_change(current: int, previous: int) -> str:
     return f"{sign}{diff:,}{pct}"
 
 
+def _diff_from_daily(
+    service: PackageStatsService, args: argparse.Namespace, period: str
+) -> bool:
+    """Render an exact period-over-period diff from the daily series.
+
+    Returns True if daily data was available and output was produced; False to
+    let the caller fall back to the snapshot-based comparison.
+    """
+    days = 7 if period == "week" else 30
+    label_unit = "Week" if period == "week" else "Month"
+
+    comparisons: list[dict[str, Any]] = []
+    for info in service.list_packages():
+        comp = service.get_period_comparison(info.name, days)
+        if comp is None:
+            continue
+        current, previous = comp
+        comparisons.append(
+            {
+                "package": info.name,
+                "current": current,
+                "previous": previous,
+                "change": current - previous,
+            }
+        )
+
+    if not comparisons:
+        return False
+
+    sort_by = getattr(args, "sort_by", "total")
+    if sort_by == "name":
+        comparisons.sort(key=lambda c: c["package"])
+    elif sort_by == "change":
+        comparisons.sort(key=lambda c: c["change"], reverse=True)
+    else:
+        comparisons.sort(key=lambda c: c["current"], reverse=True)
+
+    if getattr(args, "json", False):
+        output = [
+            {
+                "package": c["package"],
+                "period": period,
+                "current": c["current"],
+                "previous": c["previous"],
+                "change": c["change"],
+            }
+            for c in comparisons
+        ]
+        print(json.dumps(output, indent=2))
+        return True
+
+    print(f"{label_unit}-over-{label_unit} (daily downloads)\n")
+    rows = [
+        [
+            c["package"],
+            f"{c['current']:,}",
+            f"{c['previous']:,}",
+            _format_change(c["current"], c["previous"]),
+        ]
+        for c in comparisons
+    ]
+    headers = ["Package", f"This {label_unit}", f"Last {label_unit}", "Change"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
+    return True
+
+
 def cmd_diff(args: argparse.Namespace) -> None:
-    """Diff command: compare stats between two time periods."""
+    """Diff command: compare stats between two time periods.
+
+    For ``--period week`` and ``--period month`` the comparison uses the true
+    daily download series when available (exact this-period vs last-period sums
+    from a single fetch), falling back to the snapshot progression otherwise.
+    ``--period latest`` always compares the two most recent fetches.
+    """
     from datetime import datetime
 
     service = PackageStatsService(args.database)
+    period = getattr(args, "period", "latest")
+
+    # Exact period-over-period comparison from the daily series.
+    if period in ("week", "month") and _diff_from_daily(service, args, period):
+        return
+
     history = service.get_all_history(limit_per_package=60)
 
     if not history:
         logger.warning("No data in database. Run 'fetch' first.")
         return
-
-    period = getattr(args, "period", "latest")
 
     # For each package, find the current and comparison data points
     comparisons: list[dict[str, Any]] = []
@@ -462,6 +552,46 @@ def cmd_diff(args: argparse.Namespace) -> None:
     print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
+def cmd_check(args: argparse.Namespace) -> int:
+    """Check command: detect download anomalies and milestone crossings.
+
+    Analyzes the daily series for weekly spikes/drops and reports any configured
+    download milestone crossed since the previous fetch. Exits non-zero when any
+    event is found (so it composes with shell/CI notifiers); pass ``--exit-zero``
+    to always exit 0.
+    """
+    service = PackageStatsService(args.database)
+    config = load_config()
+
+    milestones = list(config.check_milestones)
+    if getattr(args, "milestone", None):
+        milestones.extend(args.milestone)
+    milestones = sorted(set(milestones))
+
+    z_override = getattr(args, "z_threshold", None)
+    z_threshold = z_override if z_override is not None else config.check_z_threshold
+
+    events = service.run_checks(
+        milestones=milestones,
+        baseline_weeks=config.check_baseline_weeks,
+        z_threshold=z_threshold,
+        min_weekly=config.check_min_weekly,
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(events, indent=2))
+    elif not events:
+        logger.info("No anomalies or milestones detected.")
+    else:
+        print(f"Detected {len(events)} event(s):\n")
+        rows = [[e["package"], e["kind"].upper(), e["message"]] for e in events]
+        print(tabulate(rows, headers=["Package", "Event", "Detail"], tablefmt="simple"))
+
+    if events and not getattr(args, "exit_zero", False):
+        return 1
+    return 0
+
+
 def cmd_packages(args: argparse.Namespace) -> None:
     """Packages command: show tracked packages."""
     service = PackageStatsService(args.database)
@@ -474,15 +604,27 @@ def cmd_packages(args: argparse.Namespace) -> None:
         )
         return
 
+    tags_by_pkg = {p.name: service.get_package_tags(p.name) for p in packages}
+
     if getattr(args, "json", False):
-        output = [{"package": p.name, "added_date": p.added_date} for p in packages]
+        output = [
+            {
+                "package": p.name,
+                "added_date": p.added_date,
+                "tags": tags_by_pkg.get(p.name, []),
+            }
+            for p in packages
+        ]
         print(json.dumps(output, indent=2))
         return
 
     logger.info("Tracking %d packages:\n", len(packages))
 
-    rows = [[pkg.name, pkg.added_date] for pkg in packages]
-    headers = ["Package", "Added"]
+    rows = [
+        [pkg.name, pkg.added_date, ", ".join(tags_by_pkg.get(pkg.name, [])) or "-"]
+        for pkg in packages
+    ]
+    headers = ["Package", "Added", "Tags"]
     print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
@@ -506,6 +648,76 @@ def cmd_remove(args: argparse.Namespace) -> None:
         logger.info("Removed '%s' from tracking.", args.name)
     else:
         logger.warning("Package '%s' was not being tracked.", args.name)
+
+
+def cmd_tag(args: argparse.Namespace) -> None:
+    """Tag command: add one or more tags to a tracked package."""
+    service = PackageStatsService(args.database)
+    tracked = {p.name for p in service.list_packages()}
+    if args.package not in tracked:
+        logger.warning(
+            "Package '%s' is not tracked. Add it first with 'pkgdb add'.",
+            args.package,
+        )
+        return
+
+    added = [tag for tag in args.tags if service.add_tag(args.package, tag)]
+    if added:
+        logger.info("Tagged %s with: %s", args.package, ", ".join(sorted(added)))
+    else:
+        logger.info("No new tags added to %s.", args.package)
+
+
+def cmd_untag(args: argparse.Namespace) -> None:
+    """Untag command: remove tags from a package."""
+    service = PackageStatsService(args.database)
+
+    if getattr(args, "all", False):
+        current = service.get_package_tags(args.package)
+        for tag in current:
+            service.remove_tag(args.package, tag)
+        if current:
+            logger.info("Removed all tags from %s.", args.package)
+        else:
+            logger.info("%s had no tags.", args.package)
+        return
+
+    if not args.tags:
+        logger.error("Specify one or more tags to remove, or use --all.")
+        return
+
+    removed = [tag for tag in args.tags if service.remove_tag(args.package, tag)]
+    if removed:
+        logger.info("Removed from %s: %s", args.package, ", ".join(sorted(removed)))
+    else:
+        logger.info("No matching tags on %s.", args.package)
+
+
+def cmd_tags(args: argparse.Namespace) -> None:
+    """Tags command: list tags with aggregate download stats (portfolio rollup)."""
+    service = PackageStatsService(args.database)
+    summary = service.get_tag_summary()
+
+    if getattr(args, "json", False):
+        print(json.dumps(summary, indent=2))
+        return
+
+    if not summary:
+        logger.info("No tags defined. Add one with 'pkgdb tag <package> <tag>'.")
+        return
+
+    rows = [
+        [
+            e["tag"],
+            e["package_count"],
+            f"{e['total']:,}",
+            f"{e['last_month']:,}",
+            f"{e['last_week']:,}",
+        ]
+        for e in summary
+    ]
+    headers = ["Tag", "Packages", "Total", "Month", "Week"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
 def cmd_import(args: argparse.Namespace) -> None:
@@ -582,65 +794,52 @@ def cmd_history(args: argparse.Namespace) -> None:
     Default: generates an HTML report with download chart, release markers,
     and history table, then opens it in the browser.
     Use --text for terminal table output, --json for machine-readable output.
+
+    Text and JSON output prefer the true per-day download series (populated
+    from a single fetch), falling back to the snapshot progression (per-fetch
+    rolling totals) when no daily data is available.
     """
     service = PackageStatsService(args.database)
-    history = service.get_history(args.package, limit=args.limit)
 
-    if not history:
-        logger.warning("No data found for package '%s'.", args.package)
-        return
-
-    # Filter by --since date if provided
+    # Resolve --since (accepts relative forms like "7d" or an ISO date).
+    since: str | None = None
     since_arg = getattr(args, "since", None)
     if since_arg:
         since, error = parse_date_arg(since_arg)
         if error:
             logger.error("Invalid --since value: %s", error)
             return
-        history = [h for h in history if h["fetch_date"] >= since]
-        if not history:
+
+    as_json = getattr(args, "json", False)
+    as_text = getattr(args, "text", False)
+
+    if as_json or as_text:
+        daily = service.get_daily_totals(args.package, since=since)
+        if daily:
+            _print_daily_history(args.package, daily, as_json=as_json)
+            return
+        # Fall back to the snapshot progression for pre-daily databases.
+        _print_snapshot_history(
+            service, args.package, args.limit, since, as_json=as_json
+        )
+        return
+
+    # Default: HTML report (uses the daily series internally when present).
+    # Guard against generating an empty report: require some data, honoring
+    # --since when supplied.
+    daily = service.get_daily_totals(args.package, since=since)
+    snapshot = service.get_history(args.package, limit=args.limit)
+    if since is not None:
+        snapshot = [h for h in snapshot if h["fetch_date"] >= since]
+    if not daily and not snapshot:
+        if since is not None:
             logger.warning(
                 "No data found for package '%s' since %s.", args.package, since
             )
-            return
-
-    # JSON output
-    if getattr(args, "json", False):
-        output = []
-        for h in reversed(history):
-            output.append(
-                {
-                    "date": h["fetch_date"],
-                    "total": h.get("total") or 0,
-                    "last_month": h.get("last_month") or 0,
-                    "last_week": h.get("last_week") or 0,
-                    "last_day": h.get("last_day") or 0,
-                }
-            )
-        print(json.dumps(output, indent=2))
+        else:
+            logger.warning("No data found for package '%s'.", args.package)
         return
 
-    # Text output
-    if getattr(args, "text", False):
-        print(f"Historical stats for {args.package}\n")
-
-        rows = []
-        for h in reversed(history):
-            rows.append(
-                [
-                    h["fetch_date"],
-                    f"{h['total'] or 0:,}",
-                    f"{h['last_month'] or 0:,}",
-                    f"{h['last_week'] or 0:,}",
-                    f"{h['last_day'] or 0:,}",
-                ]
-            )
-
-        headers = ["Date", "Total", "Month", "Week", "Day"]
-        print(tabulate(rows, headers=headers, tablefmt="simple"))
-        return
-
-    # Default: HTML report
     output_file = getattr(args, "output", DEFAULT_REPORT_FILE)
     no_browser = getattr(args, "no_browser", False)
 
@@ -651,6 +850,68 @@ def cmd_history(args: argparse.Namespace) -> None:
     if not no_browser:
         logger.info("Opening report in browser...")
         webbrowser.open_new_tab(Path(output_file).resolve().as_uri())
+
+
+def _print_daily_history(
+    package: str, daily: list[dict[str, Any]], as_json: bool
+) -> None:
+    """Render the per-day download series as JSON or a terminal table."""
+    if as_json:
+        output = [{"date": row["date"], "downloads": row["downloads"]} for row in daily]
+        print(json.dumps(output, indent=2))
+        return
+
+    print(f"Daily downloads for {package}\n")
+    rows = [[row["date"], f"{row['downloads']:,}"] for row in daily]
+    print(tabulate(rows, headers=["Date", "Downloads"], tablefmt="simple"))
+
+
+def _print_snapshot_history(
+    service: PackageStatsService,
+    package: str,
+    limit: int,
+    since: str | None,
+    as_json: bool,
+) -> None:
+    """Render the snapshot (per-fetch rolling totals) progression."""
+    history = service.get_history(package, limit=limit)
+    if not history:
+        logger.warning("No data found for package '%s'.", package)
+        return
+
+    if since:
+        history = [h for h in history if h["fetch_date"] >= since]
+        if not history:
+            logger.warning("No data found for package '%s' since %s.", package, since)
+            return
+
+    if as_json:
+        output = [
+            {
+                "date": h["fetch_date"],
+                "total": h.get("total") or 0,
+                "last_month": h.get("last_month") or 0,
+                "last_week": h.get("last_week") or 0,
+                "last_day": h.get("last_day") or 0,
+            }
+            for h in reversed(history)
+        ]
+        print(json.dumps(output, indent=2))
+        return
+
+    print(f"Historical stats for {package}\n")
+    rows = [
+        [
+            h["fetch_date"],
+            f"{h['total'] or 0:,}",
+            f"{h['last_month'] or 0:,}",
+            f"{h['last_week'] or 0:,}",
+            f"{h['last_day'] or 0:,}",
+        ]
+        for h in reversed(history)
+    ]
+    headers = ["Date", "Total", "Month", "Week", "Day"]
+    print(tabulate(rows, headers=headers, tablefmt="simple"))
 
 
 def cmd_export(args: argparse.Namespace) -> None:
@@ -918,6 +1179,7 @@ def cmd_github(args: argparse.Namespace) -> None:
                     "package": r.package_name,
                     "repo": s.full_name,
                     "stars": s.stars,
+                    "star_growth": service.get_star_growth(r.package_name),
                     "forks": s.forks,
                     "open_issues": s.open_issues,
                     "language": s.language,
@@ -942,17 +1204,23 @@ def cmd_github(args: argparse.Namespace) -> None:
             s = r.stats
             if s is None:
                 continue
+            growth = service.get_star_growth(r.package_name)
+            if growth is None:
+                growth_str = "-"
+            else:
+                growth_str = f"+{growth:,}" if growth >= 0 else f"{growth:,}"
             rows.append(
                 [
                     r.package_name,
                     f"{s.stars:,}",
+                    growth_str,
                     f"{s.forks:,}",
                     s.activity_status,
                     s.language or "-",
                 ]
             )
 
-        headers = ["Package", "Stars", "Forks", "Activity", "Language"]
+        headers = ["Package", "Stars", "Stars Δ", "Forks", "Activity", "Language"]
         print(tabulate(rows, headers=headers, tablefmt="simple"))
 
         total_stars = sum(r.stats.stars for r in successful if r.stats)
@@ -1111,6 +1379,41 @@ def create_parser() -> argparse.ArgumentParser:
     )
     remove_parser.set_defaults(func=cmd_remove)
 
+    # tag command
+    tag_parser = subparsers.add_parser(
+        "tag",
+        help="Add one or more tags (groups) to a package",
+    )
+    tag_parser.add_argument("package", help="Package to tag")
+    tag_parser.add_argument("tags", nargs="+", metavar="TAG", help="Tag(s) to add")
+    tag_parser.set_defaults(func=cmd_tag)
+
+    # untag command
+    untag_parser = subparsers.add_parser(
+        "untag",
+        help="Remove tags from a package",
+    )
+    untag_parser.add_argument("package", help="Package to untag")
+    untag_parser.add_argument("tags", nargs="*", metavar="TAG", help="Tag(s) to remove")
+    untag_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Remove all tags from the package",
+    )
+    untag_parser.set_defaults(func=cmd_untag)
+
+    # tags command
+    tags_parser = subparsers.add_parser(
+        "tags",
+        help="List tags with aggregate download stats (portfolio rollup)",
+    )
+    tags_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output in JSON format",
+    )
+    tags_parser.set_defaults(func=cmd_tags)
+
     # packages command
     packages_parser = subparsers.add_parser(
         "packages",
@@ -1209,6 +1512,11 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Show database info (size, record counts, date range)",
     )
+    show_parser.add_argument(
+        "--tag",
+        metavar="TAG",
+        help="Only show packages carrying this tag, with a group total",
+    )
     show_parser.set_defaults(func=cmd_show)
 
     # diff command
@@ -1236,6 +1544,38 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output in JSON format",
     )
     diff_parser.set_defaults(func=cmd_diff)
+
+    # check command
+    check_parser = subparsers.add_parser(
+        "check",
+        help="Detect download anomalies (weekly spikes/drops) and milestone crossings",
+    )
+    check_parser.add_argument(
+        "--milestone",
+        type=int,
+        action="append",
+        metavar="N",
+        help="Download milestone to watch (repeatable); merged with config",
+    )
+    check_parser.add_argument(
+        "-z",
+        "--z-threshold",
+        type=float,
+        dest="z_threshold",
+        default=None,
+        help="Std-devs from baseline to flag an anomaly (default: config or 2.5)",
+    )
+    check_parser.add_argument(
+        "--exit-zero",
+        action="store_true",
+        help="Always exit 0, even when events are found",
+    )
+    check_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output events in JSON format",
+    )
+    check_parser.set_defaults(func=cmd_check)
 
     # report command
     report_parser = subparsers.add_parser(
@@ -1608,4 +1948,8 @@ def main() -> None:
         parser.print_help()
         return
 
-    args.func(args)
+    # Commands may return an int exit code (e.g. `check` signals events); other
+    # commands return None. Propagate a non-zero code to the process.
+    result = args.func(args)
+    if isinstance(result, int) and result != 0:
+        raise SystemExit(result)

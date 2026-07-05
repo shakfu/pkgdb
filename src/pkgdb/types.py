@@ -19,6 +19,20 @@ class CategoryDownloads(TypedDict):
     downloads: int
 
 
+class DailyDownload(TypedDict):
+    """A single day's download count for one category of one dimension.
+
+    ``dimension`` is one of ``"overall"`` (categories ``with_mirrors`` /
+    ``without_mirrors``), ``"python"`` (categories like ``"3.12"``), or
+    ``"os"`` (categories like ``"Linux"``). ``date`` is ``YYYY-MM-DD``.
+    """
+
+    date: str
+    dimension: str
+    category: str
+    downloads: int
+
+
 class EnvSummary(TypedDict):
     """Aggregated environment statistics."""
 
@@ -75,3 +89,25 @@ class GitHubRelease(TypedDict):
     tag_name: str
     published_at: str
     name: str | None
+
+
+class CheckEvent(TypedDict, total=False):
+    """A noteworthy event surfaced by ``pkgdb check``.
+
+    ``package``, ``kind`` and ``message`` are always present. ``kind`` is one of
+    ``"spike"``, ``"drop"`` or ``"milestone"``. The remaining fields carry the
+    supporting numbers for whichever kind of event this is.
+    """
+
+    package: str
+    kind: str
+    message: str
+    # Anomaly fields (kind: spike/drop)
+    value: int
+    baseline: float
+    change_pct: float
+    z_score: float
+    period: str
+    # Milestone field (kind: milestone)
+    milestone: int
+    total: int

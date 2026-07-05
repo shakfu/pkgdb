@@ -30,6 +30,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         JSON API:
             GET /api/packages       -> All packages with latest stats
+            GET /api/daily/<name>   -> True per-day download series
+            GET /api/github-history/<name> -> GitHub stars/forks daily snapshots
             GET /api/history/<name> -> Download history for a package
             GET /api/history        -> All history data
             GET /api/env/<name>     -> Python version + OS breakdown
@@ -95,6 +97,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
             limit = _parse_int(query, "limit", 90)
             all_history = svc.get_all_history(limit_per_package=limit)
             self._respond_json(all_history)
+
+        elif path.startswith("/api/daily/"):
+            package = path[11:]  # strip "/api/daily/"
+            self._respond_json(svc.get_daily_totals(package))
+
+        elif path.startswith("/api/github-history/"):
+            package = path[20:]  # strip "/api/github-history/"
+            self._respond_json(svc.get_github_history(package))
 
         elif path.startswith("/api/history/"):
             package = path[13:]  # strip "/api/history/"

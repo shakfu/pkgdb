@@ -20,11 +20,15 @@ from pkgdb import (
     load_packages_from_file,
     store_stats,
     store_stats_batch,
+    store_daily_downloads,
+    get_daily_downloads,
     get_latest_stats,
     get_package_history,
     get_all_history,
     get_database_stats,
     get_next_update_seconds,
+    cleanup_orphaned_stats,
+    prune_old_stats,
     PackageStatsService,
 )
 from pkgdb.github import (
@@ -1197,6 +1201,291 @@ class TestGithubDatabaseInit:
         assert result is not None
         assert result["name"] == "github_cache"
         conn.close()
+
+
+def _daily(date, dimension, category, downloads):
+    """Build a single DailyDownload record."""
+    return {
+        "date": date,
+        "dimension": dimension,
+        "category": category,
+        "downloads": downloads,
+    }
+
+
+class TestDailyDownloads:
+    """Tests for the daily download time-series store."""
+
+    def test_init_db_creates_daily_downloads_table(self, temp_db):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='daily_downloads'"
+        )
+        assert cursor.fetchone() is not None
+        conn.close()
+
+    def test_store_and_get_roundtrip(self, db_conn):
+        records = [
+            _daily("2026-01-01", "overall", "without_mirrors", 100),
+            _daily("2026-01-02", "overall", "without_mirrors", 150),
+            _daily("2026-01-01", "python", "3.12", 40),
+        ]
+        written = store_daily_downloads(db_conn, "pkg", records)
+        assert written == 3
+
+        overall = get_daily_downloads(db_conn, "pkg", dimension="overall")
+        assert [r["date"] for r in overall] == ["2026-01-01", "2026-01-02"]
+        assert [r["downloads"] for r in overall] == [100, 150]
+
+        python = get_daily_downloads(db_conn, "pkg", dimension="python")
+        assert len(python) == 1
+        assert python[0]["category"] == "3.12"
+
+    def test_upsert_is_idempotent(self, db_conn):
+        """Re-storing the same day overwrites rather than duplicating."""
+        store_daily_downloads(
+            db_conn, "pkg", [_daily("2026-01-01", "overall", "without_mirrors", 100)]
+        )
+        # Same natural key, corrected count (e.g. a later fetch of the same day)
+        store_daily_downloads(
+            db_conn, "pkg", [_daily("2026-01-01", "overall", "without_mirrors", 120)]
+        )
+        rows = get_daily_downloads(db_conn, "pkg", dimension="overall")
+        assert len(rows) == 1
+        assert rows[0]["downloads"] == 120
+
+    def test_store_none_and_empty_are_noops(self, db_conn):
+        assert store_daily_downloads(db_conn, "pkg", None) == 0
+        assert store_daily_downloads(db_conn, "pkg", []) == 0
+        assert get_daily_downloads(db_conn, "pkg") == []
+
+    def test_get_filters_by_category(self, db_conn):
+        store_daily_downloads(
+            db_conn,
+            "pkg",
+            [
+                _daily("2026-01-01", "os", "Linux", 80),
+                _daily("2026-01-01", "os", "Windows", 20),
+            ],
+        )
+        linux = get_daily_downloads(db_conn, "pkg", dimension="os", category="Linux")
+        assert len(linux) == 1
+        assert linux[0]["downloads"] == 80
+
+    def test_get_filters_by_since(self, db_conn):
+        store_daily_downloads(
+            db_conn,
+            "pkg",
+            [
+                _daily("2026-01-01", "overall", "without_mirrors", 10),
+                _daily("2026-01-05", "overall", "without_mirrors", 20),
+                _daily("2026-01-10", "overall", "without_mirrors", 30),
+            ],
+        )
+        recent = get_daily_downloads(db_conn, "pkg", since="2026-01-05")
+        assert [r["date"] for r in recent] == ["2026-01-05", "2026-01-10"]
+
+    def test_cleanup_orphaned_removes_daily(self, db_conn):
+        add_package(db_conn, "tracked")
+        store_daily_downloads(
+            db_conn, "tracked", [_daily("2026-01-01", "overall", "without_mirrors", 5)]
+        )
+        store_daily_downloads(
+            db_conn, "orphan", [_daily("2026-01-01", "overall", "without_mirrors", 5)]
+        )
+        cleanup_orphaned_stats(db_conn)
+        assert get_daily_downloads(db_conn, "tracked") != []
+        assert get_daily_downloads(db_conn, "orphan") == []
+
+    def test_growth_prefers_daily_series(self, db_conn):
+        """get_stats_with_growth should compute exact growth from daily data."""
+        from pkgdb import store_stats, get_stats_with_growth
+
+        add_package(db_conn, "pkg")
+        # A single snapshot so the package appears in latest stats.
+        store_stats(
+            db_conn, "pkg",
+            {"last_day": 10, "last_week": 70, "last_month": 300, "total": 5000},
+        )
+        # 14 days of daily data: last 7 days sum to 700, prior 7 to 350 -> +100%
+        rows = []
+        for i in range(1, 8):
+            rows.append(_daily(f"2026-06-{i:02d}", "overall", "without_mirrors", 50))
+        for i in range(8, 15):
+            rows.append(_daily(f"2026-06-{i:02d}", "overall", "without_mirrors", 100))
+        store_daily_downloads(db_conn, "pkg", rows)
+
+        stats = get_stats_with_growth(db_conn)
+        s = next(x for x in stats if x["package_name"] == "pkg")
+        # current week (08-14) = 700, previous week (01-07) = 350
+        assert s["week_growth"] == 100.0
+
+    def test_prune_removes_old_daily(self, db_conn):
+        from datetime import datetime
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        store_daily_downloads(
+            db_conn,
+            "pkg",
+            [
+                _daily("2020-01-01", "overall", "without_mirrors", 5),
+                _daily(today, "overall", "without_mirrors", 7),
+            ],
+        )
+        prune_old_stats(db_conn, days=30)
+        remaining = get_daily_downloads(db_conn, "pkg")
+        assert [r["date"] for r in remaining] == [today]
+
+
+class TestPackageTags:
+    """Tests for package tagging / grouping."""
+
+    def test_add_and_get_tags(self, db_conn):
+        from pkgdb import add_package_tag, get_package_tags
+
+        add_package(db_conn, "pkg")
+        assert add_package_tag(db_conn, "pkg", "web") is True
+        assert add_package_tag(db_conn, "pkg", "cli") is True
+        assert get_package_tags(db_conn, "pkg") == ["cli", "web"]  # sorted
+
+    def test_tags_normalized(self, db_conn):
+        from pkgdb import add_package_tag, get_package_tags
+
+        add_package(db_conn, "pkg")
+        add_package_tag(db_conn, "pkg", "  Web  ")
+        assert get_package_tags(db_conn, "pkg") == ["web"]
+
+    def test_duplicate_and_empty_tag(self, db_conn):
+        from pkgdb import add_package_tag
+
+        add_package(db_conn, "pkg")
+        assert add_package_tag(db_conn, "pkg", "web") is True
+        assert add_package_tag(db_conn, "pkg", "WEB") is False  # normalized dup
+        assert add_package_tag(db_conn, "pkg", "   ") is False  # empty
+
+    def test_remove_tag(self, db_conn):
+        from pkgdb import add_package_tag, remove_package_tag, get_package_tags
+
+        add_package(db_conn, "pkg")
+        add_package_tag(db_conn, "pkg", "web")
+        assert remove_package_tag(db_conn, "pkg", "web") is True
+        assert remove_package_tag(db_conn, "pkg", "web") is False
+        assert get_package_tags(db_conn, "pkg") == []
+
+    def test_get_packages_for_tag_and_map(self, db_conn):
+        from pkgdb import add_package_tag, get_packages_for_tag, get_tags_map
+
+        for p in ("a", "b", "c"):
+            add_package(db_conn, p)
+        add_package_tag(db_conn, "a", "web")
+        add_package_tag(db_conn, "b", "web")
+        add_package_tag(db_conn, "c", "cli")
+        assert get_packages_for_tag(db_conn, "web") == ["a", "b"]
+        assert get_tags_map(db_conn) == {"cli": ["c"], "web": ["a", "b"]}
+
+    def test_remove_package_cascades_tags(self, db_conn):
+        from pkgdb import add_package_tag, get_packages_for_tag
+
+        add_package(db_conn, "pkg")
+        add_package_tag(db_conn, "pkg", "web")
+        remove_package(db_conn, "pkg")
+        assert get_packages_for_tag(db_conn, "web") == []
+
+    def test_cleanup_orphaned_removes_tags(self, db_conn):
+        from pkgdb import add_package_tag, get_packages_for_tag
+
+        add_package(db_conn, "tracked")
+        add_package_tag(db_conn, "tracked", "web")
+        # Orphan tag row (package not in packages table)
+        db_conn.execute(
+            "INSERT INTO package_tags (package_name, tag) VALUES ('orphan', 'web')"
+        )
+        db_conn.commit()
+        cleanup_orphaned_stats(db_conn)
+        assert get_packages_for_tag(db_conn, "web") == ["tracked"]
+
+
+class TestGithubStatsHistory:
+    """Tests for the GitHub metrics time-series store."""
+
+    def test_init_creates_table(self, temp_db):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name='github_stats_history'"
+        )
+        assert cur.fetchone() is not None
+        conn.close()
+
+    def test_store_and_get(self, db_conn):
+        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+
+        add_package(db_conn, "pkg")
+        store_github_stats_snapshot(db_conn, "pkg", "o/r", 100, 10, 3, 20)
+        rows = get_github_stats_history(db_conn, "pkg")
+        assert len(rows) == 1
+        assert rows[0]["stars"] == 100
+        assert rows[0]["forks"] == 10
+        assert rows[0]["open_issues"] == 3
+        assert rows[0]["watchers"] == 20
+
+    def test_same_day_upsert(self, db_conn):
+        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+
+        add_package(db_conn, "pkg")
+        store_github_stats_snapshot(db_conn, "pkg", "o/r", 100, 10, 3, 20)
+        store_github_stats_snapshot(db_conn, "pkg", "o/r", 105, 11, 2, 21)
+        rows = get_github_stats_history(db_conn, "pkg")
+        assert len(rows) == 1  # same date -> updated, not duplicated
+        assert rows[0]["stars"] == 105
+
+    def test_get_since_filter(self, db_conn):
+        from pkgdb import get_github_stats_history
+
+        db_conn.executemany(
+            "INSERT INTO github_stats_history "
+            "(package_name, repo_key, date, stars, forks, open_issues, watchers) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("pkg", "o/r", "2026-06-01", 100, 1, 1, 1),
+                ("pkg", "o/r", "2026-06-05", 110, 1, 1, 1),
+                ("pkg", "o/r", "2026-06-10", 120, 1, 1, 1),
+            ],
+        )
+        db_conn.commit()
+        rows = get_github_stats_history(db_conn, "pkg", since="2026-06-05")
+        assert [r["date"] for r in rows] == ["2026-06-05", "2026-06-10"]
+
+    def test_cleanup_orphaned_removes_history(self, db_conn):
+        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+
+        add_package(db_conn, "tracked")
+        store_github_stats_snapshot(db_conn, "tracked", "o/r", 1, 1, 1, 1)
+        store_github_stats_snapshot(db_conn, "orphan", "o/x", 1, 1, 1, 1)
+        cleanup_orphaned_stats(db_conn)
+        assert get_github_stats_history(db_conn, "tracked") != []
+        assert get_github_stats_history(db_conn, "orphan") == []
+
+    def test_prune_removes_old_history(self, db_conn):
+        from datetime import datetime
+        from pkgdb import get_github_stats_history
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        db_conn.executemany(
+            "INSERT INTO github_stats_history "
+            "(package_name, repo_key, date, stars, forks, open_issues, watchers) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [
+                ("pkg", "o/r", "2020-01-01", 1, 1, 1, 1),
+                ("pkg", "o/r", today, 2, 1, 1, 1),
+            ],
+        )
+        db_conn.commit()
+        prune_old_stats(db_conn, days=30)
+        rows = get_github_stats_history(db_conn, "pkg")
+        assert [r["date"] for r in rows] == [today]
 
 
 def _make_github_api_response(**overrides):

@@ -2,12 +2,14 @@
 
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
 from .api import (
     aggregate_env_stats,
     check_package_exists,
+    fetch_daily_downloads,
     fetch_os_stats,
     fetch_package_stats,
     fetch_pypi_releases,
@@ -16,6 +18,7 @@ from .api import (
 )
 from .db import (
     add_package,
+    add_package_tag,
     cleanup_orphaned_stats,
     get_all_history,
     get_all_github_releases,
@@ -25,23 +28,38 @@ from .db import (
     get_github_releases,
     get_latest_stats,
     get_package_history,
+    get_package_tags,
     get_packages,
+    get_packages_for_tag,
     get_cached_env_summary,
     get_cached_os_stats,
     get_cached_python_versions,
+    get_daily_downloads,
+    get_github_stats_history,
     get_next_update_seconds,
     get_packages_needing_update,
     get_pypi_releases,
+    get_tags_map,
+    store_daily_downloads,
     store_env_stats,
     store_github_releases,
+    store_github_stats_snapshot,
     store_pypi_releases,
     get_stats_with_growth,
     prune_old_stats,
     record_fetch_attempt,
     remove_package,
+    remove_package_tag,
     store_stats,
 )
 from .badges import generate_downloads_badge
+from .checks import (
+    DEFAULT_BASELINE_WEEKS,
+    DEFAULT_MIN_WEEKLY,
+    DEFAULT_Z_THRESHOLD,
+    detect_anomaly,
+    detect_milestones,
+)
 from .export import export_csv, export_json, export_markdown
 from .github import (
     RepoResult,
@@ -59,12 +77,18 @@ from .reports import (
 )
 from .types import (
     CategoryDownloads,
+    CheckEvent,
+    DailyDownload,
     DatabaseInfo,
     GitHubRelease,
     PackageStats,
     PyPIRelease,
 )
-from .utils import validate_output_path, validate_package_name
+from .utils import (
+    daily_window_sums,
+    validate_output_path,
+    validate_package_name,
+)
 
 # Delay in seconds between fetching each package to avoid hitting API rate limits
 _FETCH_DELAY_SECONDS = 1.0
@@ -350,6 +374,8 @@ class PackageStatsService:
                     py_versions = fetch_python_versions(package)
                     os_data = fetch_os_stats(package)
                     store_env_stats(conn, package, py_versions, os_data, commit=False)
+                    daily = fetch_daily_downloads(package)
+                    store_daily_downloads(conn, package, daily, commit=False)
                     record_fetch_attempt(conn, package, success=True, commit=False)
                     success += 1
                 else:
@@ -386,19 +412,76 @@ class PackageStatsService:
     # Data Retrieval
     # -------------------------------------------------------------------------
 
-    def get_stats(self, with_growth: bool = False) -> list[dict[str, Any]]:
+    def get_stats(
+        self, with_growth: bool = False, tag: str | None = None
+    ) -> list[dict[str, Any]]:
         """Get latest stats for all packages.
 
         Args:
             with_growth: If True, include growth metrics.
+            tag: If given, restrict to packages carrying this tag.
 
         Returns:
             List of stats dictionaries ordered by total downloads.
         """
         with get_db(self.db_path) as conn:
-            if with_growth:
-                return get_stats_with_growth(conn)
-            return get_latest_stats(conn)
+            stats = (
+                get_stats_with_growth(conn) if with_growth else get_latest_stats(conn)
+            )
+            if tag is not None:
+                members = set(get_packages_for_tag(conn, tag))
+                stats = [s for s in stats if s["package_name"] in members]
+            return stats
+
+    # -------------------------------------------------------------------------
+    # Tags / groups
+    # -------------------------------------------------------------------------
+
+    def add_tag(self, package: str, tag: str) -> bool:
+        """Tag a package. Returns True if added, False if empty/duplicate."""
+        with get_db(self.db_path) as conn:
+            return add_package_tag(conn, package, tag)
+
+    def remove_tag(self, package: str, tag: str) -> bool:
+        """Remove a tag from a package. Returns True if a tag was removed."""
+        with get_db(self.db_path) as conn:
+            return remove_package_tag(conn, package, tag)
+
+    def get_package_tags(self, package: str) -> list[str]:
+        """Get the sorted tags for a package."""
+        with get_db(self.db_path) as conn:
+            return get_package_tags(conn, package)
+
+    def get_tag_summary(self) -> list[dict[str, Any]]:
+        """Aggregate latest download stats per tag (a portfolio rollup).
+
+        Returns one entry per tag with its member count and the summed
+        ``total``/``last_month``/``last_week``/``last_day`` across members,
+        ordered by total downloads descending.
+        """
+        with get_db(self.db_path) as conn:
+            tags_map = get_tags_map(conn)
+            latest = {s["package_name"]: s for s in get_latest_stats(conn)}
+
+        summary: list[dict[str, Any]] = []
+        for tag, members in tags_map.items():
+            agg = {"total": 0, "last_month": 0, "last_week": 0, "last_day": 0}
+            for pkg in members:
+                s = latest.get(pkg)
+                if not s:
+                    continue
+                for key in agg:
+                    agg[key] += s.get(key) or 0
+            summary.append(
+                {
+                    "tag": tag,
+                    "package_count": len(members),
+                    "packages": members,
+                    **agg,
+                }
+            )
+        summary.sort(key=lambda e: e["total"], reverse=True)
+        return summary
 
     def get_history(self, package: str, limit: int = 30) -> list[dict[str, Any]]:
         """Get historical stats for a package.
@@ -443,6 +526,134 @@ class PackageStatsService:
                 get_cached_python_versions(conn, package),
                 get_cached_os_stats(conn, package),
             )
+
+    def get_daily_downloads(
+        self,
+        package: str,
+        dimension: str = "overall",
+        category: str | None = None,
+        since: str | None = None,
+    ) -> list[DailyDownload]:
+        """Get the stored daily download time series for a package.
+
+        Args:
+            package: Package name.
+            dimension: One of ``"overall"``, ``"python"``, or ``"os"``.
+            category: Restrict to a single category (e.g. ``"without_mirrors"``).
+            since: Only include rows on or after this ``YYYY-MM-DD`` date.
+
+        Returns:
+            List of daily records ordered by date (possibly empty).
+        """
+        with get_db(self.db_path) as conn:
+            return get_daily_downloads(
+                conn, package, dimension=dimension, category=category, since=since
+            )
+
+    def get_daily_totals(
+        self, package: str, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get the true per-day download series for a package.
+
+        Returns the ``overall`` / ``without_mirrors`` daily counts (the same
+        figure PyPI reports as "downloads", excluding mirror traffic) as a list
+        of ``{"date", "downloads"}`` dicts ordered by date. Unlike the snapshot
+        history, this is populated from a single fetch (~180 days backfilled),
+        so it renders a real trend even before repeated fetches accumulate.
+
+        Args:
+            package: Package name.
+            since: Only include rows on or after this ``YYYY-MM-DD`` date.
+
+        Returns:
+            List of ``{"date", "downloads"}`` dicts (possibly empty).
+        """
+        rows = self.get_daily_downloads(
+            package, dimension="overall", category="without_mirrors", since=since
+        )
+        return [{"date": r["date"], "downloads": r["downloads"]} for r in rows]
+
+    def get_period_comparison(self, package: str, days: int) -> tuple[int, int] | None:
+        """Compare two adjacent ``days``-long windows of true daily downloads.
+
+        Returns ``(current, previous)`` download totals for the most recent
+        window versus the one before it, or None when no daily data exists for
+        the package. Both windows are derived from a single fetch, so this gives
+        exact period-over-period figures without waiting for repeat fetches.
+
+        Args:
+            package: Package name.
+            days: Window width in calendar days (e.g. 7 for week, 30 for month).
+        """
+        series = [
+            (row["date"], row["downloads"]) for row in self.get_daily_totals(package)
+        ]
+        return daily_window_sums(series, days)
+
+    def run_checks(
+        self,
+        milestones: list[int] | None = None,
+        baseline_weeks: int = DEFAULT_BASELINE_WEEKS,
+        z_threshold: float = DEFAULT_Z_THRESHOLD,
+        min_weekly: float = DEFAULT_MIN_WEEKLY,
+    ) -> list[CheckEvent]:
+        """Scan tracked packages for download anomalies and milestone crossings.
+
+        For each package this flags a weekly spike/drop against its trailing
+        baseline (from the daily series) and any configured download milestone
+        crossed since the previous fetch (from snapshot totals). Returns the
+        events ordered by package name.
+
+        Args:
+            milestones: Download thresholds to watch (empty/None to skip).
+            baseline_weeks: Number of prior weeks used as the anomaly baseline.
+            z_threshold: Standard deviations from baseline to flag an anomaly.
+            min_weekly: Skip packages averaging fewer weekly downloads than this.
+        """
+        milestones = milestones or []
+        events: list[CheckEvent] = []
+
+        with get_db(self.db_path) as conn:
+            for package in get_packages(conn):
+                daily = get_daily_downloads(
+                    conn, package, dimension="overall", category="without_mirrors"
+                )
+                series = [(r["date"], r["downloads"]) for r in daily]
+
+                anomaly = detect_anomaly(
+                    series,
+                    baseline_weeks=baseline_weeks,
+                    z_threshold=z_threshold,
+                    min_weekly=min_weekly,
+                )
+                if anomaly is not None:
+                    anomaly["package"] = package
+                    events.append(anomaly)
+
+                if milestones:
+                    rows = conn.execute(
+                        "SELECT total FROM package_stats WHERE package_name = ? "
+                        "ORDER BY fetch_date DESC LIMIT 2",
+                        (package,),
+                    ).fetchall()
+                    if len(rows) >= 2:
+                        current, previous = rows[0]["total"], rows[1]["total"]
+                        for m in detect_milestones(previous, current, milestones):
+                            events.append(
+                                {
+                                    "package": package,
+                                    "kind": "milestone",
+                                    "milestone": m,
+                                    "total": current or 0,
+                                    "message": (
+                                        f"crossed {m:,} downloads "
+                                        f"(now {current or 0:,})"
+                                    ),
+                                }
+                            )
+
+        events.sort(key=lambda e: (e["package"], e["kind"]))
+        return events
 
     # -------------------------------------------------------------------------
     # Reporting
@@ -631,6 +842,9 @@ class PackageStatsService:
 
         with get_db(self.db_path) as conn:
             history = get_package_history(conn, package, limit=90)
+            daily_series = get_daily_downloads(
+                conn, package, dimension="overall", category="without_mirrors"
+            )
             py_versions = get_cached_python_versions(conn, package)
             os_data = get_cached_os_stats(conn, package)
 
@@ -652,6 +866,7 @@ class PackageStatsService:
             output_file,
             stats=pkg_stats,
             history=history,
+            daily_series=daily_series,
             pypi_releases=pypi_releases,
             github_releases=github_releases,
             python_versions=py_versions,
@@ -772,8 +987,54 @@ class PackageStatsService:
             for pkg in pkg_list:
                 result = fetch_package_github_stats(pkg, conn=conn, use_cache=use_cache)
                 results.append(result)
+                # Record a daily snapshot so star/fork history accumulates.
+                if result.stats is not None:
+                    s = result.stats
+                    store_github_stats_snapshot(
+                        conn,
+                        pkg,
+                        f"{s.owner}/{s.name}".lower(),
+                        s.stars,
+                        s.forks,
+                        s.open_issues,
+                        s.watchers,
+                        commit=False,
+                    )
+            conn.commit()
 
         return results
+
+    def get_github_history(
+        self, package: str, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get a package's recorded GitHub metric snapshots (date-ordered).
+
+        Args:
+            package: Package name.
+            since: Only include rows on or after this ``YYYY-MM-DD`` date.
+        """
+        with get_db(self.db_path) as conn:
+            return get_github_stats_history(conn, package, since=since)
+
+    def get_star_growth(self, package: str, days: int = 30) -> int | None:
+        """Return the change in stars over roughly the last ``days`` days.
+
+        GitHub exposes no star history, so this compares the latest snapshot to
+        the newest snapshot at least ``days`` old (or the oldest recorded, if the
+        series is younger than that). Returns None until at least two snapshots
+        exist -- growth only becomes visible as history accumulates.
+        """
+        history = self.get_github_history(package)
+        if len(history) < 2:
+            return None
+
+        latest = history[-1]
+        cutoff = (
+            datetime.strptime(latest["date"], "%Y-%m-%d") - timedelta(days=days)
+        ).strftime("%Y-%m-%d")
+        older = [h for h in history[:-1] if h["date"] <= cutoff]
+        baseline = older[-1] if older else history[0]
+        return int(latest["stars"]) - int(baseline["stars"])
 
     def clear_github_cache(self, expired_only: bool = True) -> int:
         """Clear GitHub API cache.

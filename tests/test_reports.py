@@ -670,6 +670,51 @@ class TestProjectReport:
         assert "No release data available" in html
         Path(output).unlink(missing_ok=True)
 
+    def test_project_report_prefers_daily_series(self, temp_db):
+        """When daily_series is supplied, the chart uses it and is titled Daily."""
+        stats = {"total": 5000, "last_month": 300, "last_week": 70, "last_day": 10}
+        daily = [
+            {"date": "2026-06-01", "dimension": "overall",
+             "category": "without_mirrors", "downloads": 100},
+            {"date": "2026-06-02", "dimension": "overall",
+             "category": "without_mirrors", "downloads": 137},
+            {"date": "2026-06-03", "dimension": "overall",
+             "category": "without_mirrors", "downloads": 121},
+        ]
+        output = os.path.join(os.path.dirname(temp_db), "daily_project.html")
+        result = generate_project_html_report(
+            "my-pkg", output,
+            stats=stats, history=[], daily_series=daily,
+            pypi_releases=[], github_releases=[],
+            python_versions=[], os_stats=[],
+        )
+        assert result is True
+        html = Path(output).read_text()
+        assert "Daily Downloads" in html
+        Path(output).unlink(missing_ok=True)
+
+    def test_project_report_falls_back_to_snapshot(self, temp_db):
+        """Without daily_series, the chart falls back to snapshot totals."""
+        stats = {"total": 5000, "last_month": 300, "last_week": 70, "last_day": 10}
+        history = [
+            {"package_name": "my-pkg", "fetch_date": "2026-03-01",
+             "total": 4000, "last_month": 250, "last_week": 60, "last_day": 8},
+            {"package_name": "my-pkg", "fetch_date": "2026-04-01",
+             "total": 5000, "last_month": 300, "last_week": 70, "last_day": 10},
+        ]
+        output = os.path.join(os.path.dirname(temp_db), "snap_project.html")
+        result = generate_project_html_report(
+            "my-pkg", output,
+            stats=stats, history=history, daily_series=None,
+            pypi_releases=[], github_releases=[],
+            python_versions=[], os_stats=[],
+        )
+        assert result is True
+        html = Path(output).read_text()
+        assert "Downloads &amp; Releases" in html or "Downloads & Releases" in html
+        assert "Daily Downloads" not in html
+        Path(output).unlink(missing_ok=True)
+
 
 def _make_repo_stats(**overrides):
     """Helper to create a RepoStats with sensible defaults."""

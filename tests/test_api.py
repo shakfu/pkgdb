@@ -9,6 +9,7 @@ from pkgdb import (
     fetch_package_stats,
     fetch_python_versions,
     fetch_os_stats,
+    fetch_daily_downloads,
     aggregate_env_stats,
     fetch_user_packages,
     check_package_exists,
@@ -98,6 +99,107 @@ class TestFetchPackageStats:
             os_stats = fetch_os_stats("nonexistent-package")
 
         assert os_stats is None
+
+
+class TestFetchDailyDownloads:
+    """Tests for the daily time-series fetch across all dimensions."""
+
+    @staticmethod
+    def _daily_response(category_dates):
+        """Build a pypistats-style daily response.
+
+        category_dates: list of (category, date, downloads) tuples.
+        """
+        return json.dumps(
+            {
+                "data": [
+                    {"category": c, "date": d, "downloads": n}
+                    for c, d, n in category_dates
+                ]
+            }
+        )
+
+    def test_combines_all_dimensions_and_tags_them(self):
+        overall = self._daily_response(
+            [
+                ("with_mirrors", "2026-01-01", 120),
+                ("without_mirrors", "2026-01-01", 100),
+            ]
+        )
+        python = self._daily_response([("3.12", "2026-01-01", 40)])
+        system = self._daily_response([("Linux", "2026-01-01", 80)])
+
+        with (
+            patch("pkgdb.api.pypistats.overall", return_value=overall),
+            patch("pkgdb.api.pypistats.python_minor", return_value=python),
+            patch("pkgdb.api.pypistats.system", return_value=system),
+        ):
+            records = fetch_daily_downloads("pkg")
+
+        assert records is not None
+        dims = {r["dimension"] for r in records}
+        assert dims == {"overall", "python", "os"}
+        assert len(records) == 4
+        py = [r for r in records if r["dimension"] == "python"][0]
+        assert py["category"] == "3.12"
+        assert py["downloads"] == 40
+
+    def test_requests_daily_totals(self):
+        """Every dimension must be fetched with total='daily'."""
+        empty = json.dumps({"data": []})
+        with (
+            patch("pkgdb.api.pypistats.overall", return_value=empty) as m_overall,
+            patch("pkgdb.api.pypistats.python_minor", return_value=empty),
+            patch("pkgdb.api.pypistats.system", return_value=empty),
+        ):
+            fetch_daily_downloads("pkg")
+        _, kwargs = m_overall.call_args
+        assert kwargs.get("total") == "daily"
+
+    def test_partial_failure_returns_other_dimensions(self):
+        overall = self._daily_response([("without_mirrors", "2026-01-01", 100)])
+        with (
+            patch("pkgdb.api.pypistats.overall", return_value=overall),
+            patch(
+                "pkgdb.api.pypistats.python_minor",
+                side_effect=ValueError("boom"),
+            ),
+            patch("pkgdb.api.pypistats.system", side_effect=ValueError("boom")),
+        ):
+            records = fetch_daily_downloads("pkg")
+
+        assert records is not None
+        assert {r["dimension"] for r in records} == {"overall"}
+
+    def test_all_failures_return_none(self):
+        with (
+            patch("pkgdb.api.pypistats.overall", side_effect=ValueError("boom")),
+            patch("pkgdb.api.pypistats.python_minor", side_effect=ValueError("boom")),
+            patch("pkgdb.api.pypistats.system", side_effect=ValueError("boom")),
+        ):
+            assert fetch_daily_downloads("pkg") is None
+
+    def test_skips_rows_missing_date_or_category(self):
+        response = json.dumps(
+            {
+                "data": [
+                    {"category": "without_mirrors", "date": "2026-01-01", "downloads": 100},
+                    {"category": None, "date": "2026-01-01", "downloads": 5},
+                    {"category": "without_mirrors", "date": None, "downloads": 5},
+                ]
+            }
+        )
+        empty = json.dumps({"data": []})
+        with (
+            patch("pkgdb.api.pypistats.overall", return_value=response),
+            patch("pkgdb.api.pypistats.python_minor", return_value=empty),
+            patch("pkgdb.api.pypistats.system", return_value=empty),
+        ):
+            records = fetch_daily_downloads("pkg")
+
+        assert records is not None
+        assert len(records) == 1
+        assert records[0]["category"] == "without_mirrors"
 
 
 class TestFetchUserPackages:

@@ -371,6 +371,12 @@ def generate_package_page(package_name: str) -> str:
 <div class="chart-wrapper" id="history-chart"></div>
 </div>
 
+<div class="card" id="github-card" style="display:none">
+<h2>GitHub Stars</h2>
+<p style="font-size:0.85em;color:#888;margin-bottom:8px">Recorded once per day on <code>github</code> fetch; accumulates over time</p>
+<div class="chart-wrapper" id="github-chart"></div>
+</div>
+
 <div style="display:flex;gap:20px;flex-wrap:wrap">
 <div class="card" style="flex:1;min-width:300px">
 <h2>Python Versions</h2>
@@ -393,21 +399,27 @@ var pkgName = {_js_string(package_name)};
 document.addEventListener("DOMContentLoaded", function() {{
     Promise.all([
         fetch("/api/packages").then(r => r.json()),
+        fetch("/api/daily/" + encodeURIComponent(pkgName)).then(r => r.json()),
         fetch("/api/history/" + encodeURIComponent(pkgName) + "?limit=90").then(r => r.json()),
         fetch("/api/env/" + encodeURIComponent(pkgName)).then(r => r.json()),
         fetch("/api/releases/" + encodeURIComponent(pkgName)).then(r => r.json()),
+        fetch("/api/github-history/" + encodeURIComponent(pkgName)).then(r => r.json()),
     ]).then(function(results) {{
         var allStats = results[0];
-        var history = results[1];
-        var env = results[2];
-        var releases = results[3];
+        var daily = results[1];
+        var history = results[2];
+        var env = results[3];
+        var releases = results[4];
+        var githubHistory = results[5];
 
         var pkg = allStats.find(function(p) {{ return p.package_name === pkgName; }});
         renderDetailStats(pkg);
-        // Store for toggle rebuilds
+        // Store for toggle rebuilds; prefer the true daily series when present.
+        window._dailyData = daily;
         window._historyData = history;
         window._releasesData = releases;
-        renderHistoryChart(history, releases);
+        window._useDaily = !!(daily && daily.length);
+        renderTrendChart(releases);
         // Show toggles if any releases exist
         if ((releases.pypi && releases.pypi.length) || (releases.github && releases.github.length)) {{
             document.getElementById("release-toggles").style.display = "";
@@ -416,6 +428,7 @@ document.addEventListener("DOMContentLoaded", function() {{
         document.getElementById("toggle-github").addEventListener("change", rebuildChart);
         renderBarChart("py-bars", env.python_versions, "category", "downloads");
         renderBarChart("os-bars", env.os_stats, "category", "downloads");
+        renderGithubChart(githubHistory);
         renderReleases(releases);
     }}).catch(function(e) {{
         document.getElementById("detail-stats").innerHTML =
@@ -453,35 +466,22 @@ function rebuildChart() {{
         pypi: document.getElementById("toggle-pypi").checked ? rel.pypi : [],
         github: document.getElementById("toggle-github").checked ? rel.github : [],
     }};
-    renderHistoryChart(window._historyData, filtered);
+    renderTrendChart(filtered);
 }}
 
 var _historyChart = null;
+var _githubChart = null;
 
-function renderHistoryChart(history, releases) {{
-    var el = document.getElementById("history-chart");
-    if (_historyChart) {{
-        _historyChart.destroy();
-        _historyChart = null;
+// Route to the true daily series when available, else the snapshot progression.
+function renderTrendChart(releases) {{
+    if (window._useDaily) {{
+        renderDailyChart(window._dailyData, releases);
+    }} else {{
+        renderHistoryChart(window._historyData, releases);
     }}
-    if (!history || history.length === 0) {{
-        el.innerHTML = '<p class="empty">No history data available.</p>';
-        return;
-    }}
+}}
 
-    // Sort by date ascending
-    history.sort(function(a, b) {{ return a.fetch_date < b.fetch_date ? -1 : 1; }});
-
-    var timestamps = history.map(function(h) {{
-        return new Date(h.fetch_date + "T00:00:00").getTime() / 1000;
-    }});
-    var daily = history.map(function(h) {{ return h.last_day; }});
-    var weekly = history.map(function(h) {{ return h.last_week; }});
-    var monthly = history.map(function(h) {{ return h.last_month; }});
-
-    var data = [timestamps, daily, weekly, monthly];
-
-    // Build release markers from PyPI and GitHub releases
+function buildReleaseMarkers(releases) {{
     var releaseMarkers = [];
     var pypi = (releases && releases.pypi) || [];
     var github = (releases && releases.github) || [];
@@ -503,13 +503,15 @@ function renderHistoryChart(history, releases) {{
     }});
     // Deduplicate within same source at same date
     var seen = {{}};
-    releaseMarkers = releaseMarkers.filter(function(m) {{
+    return releaseMarkers.filter(function(m) {{
         var key = m.source + ":" + m.ts;
         if (seen[key]) return false;
         seen[key] = true;
         return true;
     }});
+}}
 
+function mountTrendChart(el, data, series, releaseMarkers, timestamps) {{
     // Reserve top padding for release labels (longest label ~6 chars at 10px rotated)
     var topPad = releaseMarkers.length > 0 ? 50 : 10;
 
@@ -537,12 +539,7 @@ function renderHistoryChart(history, releases) {{
                 }},
             }},
         ],
-        series: [
-            {{ label: "" }},
-            {{ label: "Daily", stroke: "{CHART_COLORS[0]}", width: 2, fill: "{CHART_COLORS[0]}22" }},
-            {{ label: "Weekly", stroke: "{CHART_COLORS[1]}", width: 2 }},
-            {{ label: "Monthly", stroke: "{CHART_COLORS[2]}", width: 2 }},
-        ],
+        series: series,
         plugins: [releaseMarkersPlugin(releaseMarkers)],
     }};
 
@@ -561,6 +558,60 @@ function renderHistoryChart(history, releases) {{
     window.addEventListener("resize", function() {{
         chart.setSize({{ width: Math.min(el.clientWidth, 1100), height: 320 }});
     }});
+}}
+
+function renderDailyChart(daily, releases) {{
+    var el = document.getElementById("history-chart");
+    if (_historyChart) {{
+        _historyChart.destroy();
+        _historyChart = null;
+    }}
+    if (!daily || daily.length === 0) {{
+        el.innerHTML = '<p class="empty">No history data available.</p>';
+        return;
+    }}
+
+    daily = daily.slice().sort(function(a, b) {{ return a.date < b.date ? -1 : 1; }});
+    var timestamps = daily.map(function(d) {{
+        return new Date(d.date + "T00:00:00").getTime() / 1000;
+    }});
+    var downloads = daily.map(function(d) {{ return d.downloads; }});
+    var data = [timestamps, downloads];
+    var series = [
+        {{ label: "" }},
+        {{ label: "Downloads/day", stroke: "{CHART_COLORS[0]}", width: 2, fill: "{CHART_COLORS[0]}22" }},
+    ];
+    mountTrendChart(el, data, series, buildReleaseMarkers(releases), timestamps);
+}}
+
+function renderHistoryChart(history, releases) {{
+    var el = document.getElementById("history-chart");
+    if (_historyChart) {{
+        _historyChart.destroy();
+        _historyChart = null;
+    }}
+    if (!history || history.length === 0) {{
+        el.innerHTML = '<p class="empty">No history data available.</p>';
+        return;
+    }}
+
+    // Sort by date ascending
+    history.sort(function(a, b) {{ return a.fetch_date < b.fetch_date ? -1 : 1; }});
+
+    var timestamps = history.map(function(h) {{
+        return new Date(h.fetch_date + "T00:00:00").getTime() / 1000;
+    }});
+    var daily = history.map(function(h) {{ return h.last_day; }});
+    var weekly = history.map(function(h) {{ return h.last_week; }});
+    var monthly = history.map(function(h) {{ return h.last_month; }});
+    var data = [timestamps, daily, weekly, monthly];
+    var series = [
+        {{ label: "" }},
+        {{ label: "Daily", stroke: "{CHART_COLORS[0]}", width: 2, fill: "{CHART_COLORS[0]}22" }},
+        {{ label: "Weekly", stroke: "{CHART_COLORS[1]}", width: 2 }},
+        {{ label: "Monthly", stroke: "{CHART_COLORS[2]}", width: 2 }},
+    ];
+    mountTrendChart(el, data, series, buildReleaseMarkers(releases), timestamps);
 }}
 
 function releaseMarkersPlugin(markers) {{
@@ -622,6 +673,58 @@ function releaseMarkersPlugin(markers) {{
             }}],
         }},
     }};
+}}
+
+function renderGithubChart(history) {{
+    // Stars-over-time. Needs at least two daily snapshots to draw a trend;
+    // GitHub exposes no history, so this fills in only as `github` is re-run.
+    if (!history || history.length < 2) {{
+        return;
+    }}
+    document.getElementById("github-card").style.display = "";
+    var el = document.getElementById("github-chart");
+    if (_githubChart) {{
+        _githubChart.destroy();
+        _githubChart = null;
+    }}
+
+    history = history.slice().sort(function(a, b) {{ return a.date < b.date ? -1 : 1; }});
+    var timestamps = history.map(function(h) {{
+        return new Date(h.date + "T00:00:00").getTime() / 1000;
+    }});
+    var stars = history.map(function(h) {{ return h.stars; }});
+    var data = [timestamps, stars];
+
+    var opts = {{
+        width: Math.min(el.clientWidth, 1100),
+        height: 260,
+        cursor: {{ drag: {{ x: true, y: false, setScale: true }} }},
+        scales: {{ x: {{ time: true }}, y: {{ auto: true }} }},
+        axes: [
+            {{ stroke: "#888", grid: {{ stroke: "#eee" }} }},
+            {{
+                stroke: "#888",
+                grid: {{ stroke: "#eee" }},
+                values: function(u, vals) {{
+                    return vals.map(function(v) {{
+                        if (v >= 1e6) return (v/1e6).toFixed(1) + "M";
+                        if (v >= 1e3) return (v/1e3).toFixed(1) + "K";
+                        return v;
+                    }});
+                }},
+            }},
+        ],
+        series: [
+            {{ label: "" }},
+            {{ label: "Stars", stroke: "{CHART_COLORS[1]}", width: 2, fill: "{CHART_COLORS[1]}22" }},
+        ],
+    }};
+
+    _githubChart = new uPlot(opts, data, el);
+    var chart = _githubChart;
+    window.addEventListener("resize", function() {{
+        chart.setSize({{ width: Math.min(el.clientWidth, 1100), height: 260 }});
+    }});
 }}
 
 function renderBarChart(containerId, items, labelKey, valueKey) {{

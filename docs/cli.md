@@ -31,10 +31,24 @@ Remove a package from tracking.
 
 ### `pkgdb packages`
 
-List tracked packages with their added dates. Alias: `pkgdb list`.
+List tracked packages with their added dates and tags. Alias: `pkgdb list`.
 
 ```bash
-pkgdb packages --json               # JSON output
+pkgdb packages --json               # JSON output (includes tags)
+```
+
+### `pkgdb tag` / `pkgdb untag` / `pkgdb tags`
+
+Group related packages with tags and view per-group (portfolio) rollups. Tags
+are case-insensitive.
+
+```bash
+pkgdb tag requests web api          # add one or more tags to a package
+pkgdb untag requests api            # remove a tag
+pkgdb untag requests --all          # remove all tags
+pkgdb tags                          # list tags with aggregate downloads
+pkgdb tags --json
+pkgdb show --tag web                # filter show to a group, with a group total
 ```
 
 ### `pkgdb import <file>`
@@ -86,10 +100,25 @@ Compare download stats between time periods.
 
 ```bash
 pkgdb diff                          # vs previous fetch
-pkgdb diff --period week            # this week vs last week
+pkgdb diff --period week            # this week vs last week (exact, from daily data)
 pkgdb diff --period month           # this month vs last month
 pkgdb diff --sort-by change
 pkgdb diff --json
+```
+
+### `pkgdb check`
+
+Detect download anomalies (weekly spikes/drops vs a trailing baseline) and
+milestone crossings. Exits non-zero when any event is found, so it composes with
+shell and CI notifiers. Configure milestones and thresholds under `[check]` in
+`config.toml`.
+
+```bash
+pkgdb check                         # report events; exit 1 if any found
+pkgdb check --json                  # machine-readable events
+pkgdb check --milestone 100000      # watch a download target (repeatable)
+pkgdb check -z 3.0                  # require a larger deviation to flag
+pkgdb check --exit-zero             # report but always exit 0
 ```
 
 ### `pkgdb history <package>`
@@ -124,15 +153,17 @@ pkgdb releases requests --json
 
 ### `pkgdb github`
 
-Fetch and display GitHub repository stats.
+Fetch and display GitHub repository stats. Each fetch records a daily snapshot of
+stars/forks/issues/watchers, so the output includes a "Stars Δ" column showing
+star growth over roughly the last 30 days once enough history has accumulated.
 
 ```bash
-pkgdb github                        # fetch stats
+pkgdb github                        # fetch stats (records a daily snapshot)
 pkgdb github fetch --sort stars
 pkgdb github fetch --no-cache
 pkgdb github cache                  # cache info
 pkgdb github clear                  # clear expired cache
-pkgdb github --json
+pkgdb github --json                 # includes a star_growth field
 ```
 
 ### `pkgdb export`

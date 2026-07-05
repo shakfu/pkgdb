@@ -48,6 +48,12 @@ class PkgdbConfig:
     # [init]
     pypi_user: str | None = None
 
+    # [check]
+    check_milestones: list[int] = field(default_factory=list)
+    check_baseline_weeks: int = 8
+    check_z_threshold: float = 2.5
+    check_min_weekly: float = 10.0
+
     # Raw parsed data for extensibility
     _raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -84,6 +90,17 @@ def load_config(config_path: Path | None = None) -> PkgdbConfig:
     defaults = raw.get("defaults", {})
     report = raw.get("report", {})
     init_section = raw.get("init", {})
+    check = raw.get("check", {})
+
+    # Milestones must be a list of ints; ignore malformed entries gracefully.
+    raw_milestones = check.get("milestones", [])
+    milestones: list[int] = []
+    if isinstance(raw_milestones, list):
+        for m in raw_milestones:
+            try:
+                milestones.append(int(m))
+            except (TypeError, ValueError):
+                logger.warning("Ignoring non-integer milestone in config: %r", m)
 
     return PkgdbConfig(
         database=defaults.get("database"),
@@ -93,5 +110,9 @@ def load_config(config_path: Path | None = None) -> PkgdbConfig:
         sort_by=defaults.get("sort_by", "total"),
         report_output=report.get("output"),
         pypi_user=init_section.get("pypi_user"),
+        check_milestones=sorted(set(milestones)),
+        check_baseline_weeks=int(check.get("baseline_weeks", 8)),
+        check_z_threshold=float(check.get("z_threshold", 2.5)),
+        check_min_weekly=float(check.get("min_weekly", 10.0)),
         _raw=raw,
     )

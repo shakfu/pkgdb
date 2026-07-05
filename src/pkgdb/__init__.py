@@ -5,13 +5,14 @@ Reads published packages from packages.json, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.1.12"
+__version__ = "0.2.0"
 
 # Re-export public API from submodules
 from .api import (
     aggregate_env_stats,
     check_package_exists,
     fetch_all_package_stats,
+    fetch_daily_downloads,
     fetch_os_stats,
     fetch_package_stats,
     fetch_pypi_releases,
@@ -22,6 +23,11 @@ from .badges import (
     BADGE_COLORS,
     generate_badge_svg,
     generate_downloads_badge,
+)
+from .checks import (
+    detect_anomaly,
+    detect_milestones,
+    weekly_totals,
 )
 from .cli import (
     DEFAULT_PACKAGES_FILE,
@@ -40,6 +46,7 @@ from .db import (
     DEFAULT_DB_FILE,
     DEFAULT_REPORT_FILE,
     add_package,
+    add_package_tag,
     cleanup_orphaned_stats,
     get_all_github_releases,
     get_all_history,
@@ -48,13 +55,18 @@ from .db import (
     get_cached_os_stats,
     get_cached_python_versions,
     get_config_dir,
+    get_daily_downloads,
     get_database_stats,
     get_db,
     get_db_connection,
     get_github_releases,
+    get_github_stats_history,
     get_latest_stats,
     get_package_history,
+    get_package_tags,
     get_packages,
+    get_packages_for_tag,
+    get_tags_map,
     get_next_update_seconds,
     get_packages_needing_update,
     get_pypi_releases,
@@ -63,8 +75,11 @@ from .db import (
     prune_old_stats,
     record_fetch_attempt,
     remove_package,
+    remove_package_tag,
+    store_daily_downloads,
     store_env_stats,
     store_github_releases,
+    store_github_stats_snapshot,
     store_pypi_releases,
     store_stats,
     store_stats_batch,
@@ -106,6 +121,8 @@ from .service import (
 )
 from .types import (
     CategoryDownloads,
+    CheckEvent,
+    DailyDownload,
     DatabaseInfo,
     EnvSummary,
     GitHubRelease,
@@ -116,6 +133,7 @@ from .types import (
 )
 from .utils import (
     calculate_growth,
+    daily_window_sums,
     make_sparkline,
     parse_date_arg,
     validate_output_path,
@@ -129,6 +147,7 @@ __all__ = [
     "aggregate_env_stats",
     "check_package_exists",
     "fetch_all_package_stats",
+    "fetch_daily_downloads",
     "fetch_os_stats",
     "fetch_package_stats",
     "fetch_pypi_releases",
@@ -138,6 +157,10 @@ __all__ = [
     "BADGE_COLORS",
     "generate_badge_svg",
     "generate_downloads_badge",
+    # Checks
+    "detect_anomaly",
+    "detect_milestones",
+    "weekly_totals",
     # CLI
     "DEFAULT_PACKAGES_FILE",
     "apply_config",
@@ -153,6 +176,7 @@ __all__ = [
     "DEFAULT_DB_FILE",
     "DEFAULT_REPORT_FILE",
     "add_package",
+    "add_package_tag",
     "cleanup_orphaned_stats",
     "get_all_github_releases",
     "get_all_history",
@@ -161,13 +185,18 @@ __all__ = [
     "get_cached_os_stats",
     "get_cached_python_versions",
     "get_config_dir",
+    "get_daily_downloads",
     "get_database_stats",
     "get_db",
     "get_db_connection",
     "get_github_releases",
+    "get_github_stats_history",
     "get_latest_stats",
     "get_package_history",
+    "get_package_tags",
     "get_packages",
+    "get_packages_for_tag",
+    "get_tags_map",
     "get_next_update_seconds",
     "get_packages_needing_update",
     "get_pypi_releases",
@@ -176,8 +205,11 @@ __all__ = [
     "prune_old_stats",
     "record_fetch_attempt",
     "remove_package",
+    "remove_package_tag",
+    "store_daily_downloads",
     "store_env_stats",
     "store_github_releases",
+    "store_github_stats_snapshot",
     "store_pypi_releases",
     "store_stats",
     "store_stats_batch",
@@ -213,6 +245,8 @@ __all__ = [
     "SyncResult",
     # Types
     "CategoryDownloads",
+    "CheckEvent",
+    "DailyDownload",
     "DatabaseInfo",
     "EnvSummary",
     "GitHubRelease",
@@ -222,6 +256,7 @@ __all__ = [
     "StatsWithGrowth",
     # Utils
     "calculate_growth",
+    "daily_window_sums",
     "make_sparkline",
     "parse_date_arg",
     "validate_output_path",
