@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from conftest import mock_pypistats
 
 from pkgdb import (
     get_db_connection,
@@ -501,9 +502,8 @@ class TestBatchStatsStorage:
             "data": [{"category": "without_mirrors", "downloads": 50000}]
         })
 
-        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                result = service.fetch_all_stats()
+        with mock_pypistats(recent=recent_response, overall=overall_response):
+            result = service.fetch_all_stats()
 
         assert result.success == 2
         assert result.failed == 0
@@ -637,17 +637,15 @@ class TestFetchAttemptTracking:
         })
 
         # First fetch - both packages
-        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                result1 = service.fetch_all_stats()
+        with mock_pypistats(recent=recent_response, overall=overall_response):
+            result1 = service.fetch_all_stats()
 
         assert result1.success == 2
         assert result1.skipped == 0
 
         # Second fetch - both should be skipped
-        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                result2 = service.fetch_all_stats()
+        with mock_pypistats(recent=recent_response, overall=overall_response):
+            result2 = service.fetch_all_stats()
 
         assert result2.success == 0
         assert result2.skipped == 2
@@ -747,9 +745,8 @@ class TestNextUpdateTime:
         # First fetch succeeds
         recent = json.dumps({"data": {"last_day": 10, "last_week": 70, "last_month": 300}})
         overall = json.dumps({"data": [{"category": "without_mirrors", "downloads": 5000}]})
-        with patch("pkgdb.api.pypistats.recent", return_value=recent):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall):
-                result1 = service.fetch_all_stats()
+        with mock_pypistats(recent=recent, overall=overall):
+            result1 = service.fetch_all_stats()
 
         assert result1.success == 1
 

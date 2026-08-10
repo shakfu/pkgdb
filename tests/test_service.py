@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from conftest import track
+from conftest import mock_pypistats, track
 from pkgdb import (
     get_db_connection,
     get_db,
@@ -136,9 +136,8 @@ class TestPackageStatsService:
         def on_progress(current, total, package, stats):
             progress_calls.append((current, total, package, stats))
 
-        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                result = service.fetch_all_stats(progress_callback=on_progress)
+        with mock_pypistats(recent=recent_response, overall=overall_response):
+            result = service.fetch_all_stats(progress_callback=on_progress)
 
         assert isinstance(result, FetchResult)
         assert result.success == 1

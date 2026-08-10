@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
-from conftest import track
+from conftest import mock_pypistats, track
 from pkgdb import (
     get_db_connection,
     get_db,
@@ -210,9 +210,8 @@ class TestCLI:
         })
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "fetch"]):
-            with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-                with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                    main()
+            with mock_pypistats(recent=recent_response, overall=overall_response):
+                main()
 
         conn = get_db_connection(temp_db)
         cursor = conn.execute("SELECT COUNT(*) as count FROM package_stats")
@@ -1053,8 +1052,9 @@ class TestInitCommand:
                 with patch("pkgdb.service.fetch_package_stats", return_value=mock_stats):
                     with patch("pkgdb.service.fetch_python_versions", return_value=None):
                         with patch("pkgdb.service.fetch_os_stats", return_value=None):
-                            with self._no_config():
-                                main()
+                            with patch("pkgdb.service.fetch_daily_downloads", return_value=None):
+                                with self._no_config():
+                                    main()
 
         assert "Syncing packages" in caplog.text
         assert "Added 1 packages" in caplog.text
@@ -1078,8 +1078,9 @@ class TestInitCommand:
                     with patch("pkgdb.service.fetch_package_stats", return_value=mock_stats):
                         with patch("pkgdb.service.fetch_python_versions", return_value=None):
                             with patch("pkgdb.service.fetch_os_stats", return_value=None):
-                                with self._no_config():
-                                    main()
+                                with patch("pkgdb.service.fetch_daily_downloads", return_value=None):
+                                    with self._no_config():
+                                        main()
 
         assert "Added 'test-pkg'" in caplog.text
         assert "Fetch complete" in caplog.text
@@ -1347,8 +1348,12 @@ class TestJSONOutput:
                                 "-o", output, "--no-browser"]):
             with patch("pkgdb.service.fetch_pypi_releases", return_value=[]):
                 with patch("pkgdb.service.extract_github_url", return_value=None):
-                    with self._no_config():
-                        main()
+                    # No env stats are cached for this package, so the report
+                    # would otherwise fetch them from pypistats.
+                    with patch("pkgdb.reports.fetch_python_versions", return_value=None):
+                        with patch("pkgdb.reports.fetch_os_stats", return_value=None):
+                            with self._no_config():
+                                main()
 
         assert "Project report generated" in caplog.text
         assert Path(output).exists()

@@ -4,8 +4,11 @@ import ipaddress
 import json
 import socket
 import tempfile
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
+import pypistats._cache
 import pytest
 
 from pkgdb import get_db_connection, init_db
@@ -32,6 +35,22 @@ def _is_local(address) -> bool:
     except ValueError:
         return False
     return ip.is_loopback or ip.is_unspecified
+
+
+@pytest.fixture(autouse=True)
+def isolate_pypistats_cache(tmp_path_factory, monkeypatch):
+    """Point pypistats at a throwaway cache directory.
+
+    pypistats serves responses from `~/.cache/pypistats` (or the platform
+    equivalent) before hitting the network, so a developer machine that has
+    ever run a real fetch will silently satisfy an unmocked call. CI starts
+    with an empty cache and hits the network instead, which is how a missing
+    mock ends up passing locally and failing there. An empty per-run cache
+    makes both environments behave the same.
+    """
+    monkeypatch.setattr(
+        pypistats._cache, "CACHE_DIR", tmp_path_factory.mktemp("pypistats-cache")
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -76,6 +95,39 @@ def block_network(request, monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", connect)
     monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
     monkeypatch.setattr(socket, "create_connection", create_connection)
+
+
+# Responses standing in for a package with no recorded downloads. They are
+# valid payloads of the right shape, so code under test takes its normal path
+# rather than an error path.
+NO_RECENT = json.dumps({"data": {"last_day": 0, "last_week": 0, "last_month": 0}})
+NO_CATEGORIES = json.dumps({"data": []})
+
+
+@contextmanager
+def mock_pypistats(recent=None, overall=None, python_minor=None, system=None):
+    """Patch every pypistats endpoint that a fetch touches.
+
+    A single package fetch calls `recent`, `overall` (once for the aggregate
+    total and again for the daily series), `python_minor` and `system`.
+    Patching only the two that a test asserts on leaves the others pointed at
+    the live API, so this patches all four and lets a test supply just the
+    responses it cares about; the rest report no downloads.
+
+    Each argument is the JSON string that endpoint should return.
+    """
+    responses = {
+        "recent": NO_RECENT if recent is None else recent,
+        "overall": NO_CATEGORIES if overall is None else overall,
+        "python_minor": NO_CATEGORIES if python_minor is None else python_minor,
+        "system": NO_CATEGORIES if system is None else system,
+    }
+    with ExitStack() as stack:
+        for name, response in responses.items():
+            stack.enter_context(
+                patch(f"pkgdb.api.pypistats.{name}", return_value=response)
+            )
+        yield
 
 
 def track(conn, *package_names, added_date="2024-01-01"):

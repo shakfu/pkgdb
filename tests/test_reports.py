@@ -602,11 +602,15 @@ class TestProjectReport:
             GitHubRelease(tag_name="v0.1.0", published_at="2026-03-16", name=None),
         ]
 
+        python_versions = [{"category": "3.12", "downloads": 30000}]
+        os_stats = [{"category": "Linux", "downloads": 20000}]
+
         output = os.path.join(os.path.dirname(temp_db), "project_report.html")
         result = generate_project_html_report(
             "my-pkg", output,
             stats=stats, history=history,
             pypi_releases=pypi_releases, github_releases=github_releases,
+            python_versions=python_versions, os_stats=os_stats,
         )
         assert result is True
 
@@ -623,6 +627,9 @@ class TestProjectReport:
         # Chart markers should use the marker colors
         assert "#4a90a4" in html  # PyPI marker color
         assert "#e67e22" in html  # GitHub marker color
+        # Env breakdown charts
+        assert "3.12" in html
+        assert "Linux" in html
         Path(output).unlink(missing_ok=True)
 
     def test_generate_project_report_no_github(self, temp_db):
@@ -643,6 +650,7 @@ class TestProjectReport:
             "my-pkg", output,
             stats=stats, history=history,
             pypi_releases=pypi_releases, github_releases=[],
+            python_versions=[], os_stats=[],
         )
         assert result is True
 
@@ -661,6 +669,7 @@ class TestProjectReport:
         result = generate_project_html_report(
             "my-pkg", output,
             stats=stats, history=[], pypi_releases=[], github_releases=[],
+            python_versions=[], os_stats=[],
         )
         assert result is True
 
