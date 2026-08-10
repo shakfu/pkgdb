@@ -71,6 +71,9 @@ class DatabaseInfo(TypedDict):
 
     package_count: int
     record_count: int
+    snapshot_records: int
+    daily_records: int
+    github_history_records: int
     first_fetch: str | None
     last_fetch: str | None
     db_size_bytes: int

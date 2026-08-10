@@ -9,6 +9,22 @@ import pytest
 from pkgdb import get_db_connection, init_db
 
 
+def track(conn, *package_names, added_date="2024-01-01"):
+    """Register packages in the `packages` table.
+
+    Tests that seed `package_stats` directly still need their packages listed
+    as tracked, because tracked-package views (show, report, export, history)
+    filter on `packages` so that removed packages stop appearing before
+    `cleanup` physically purges their retained rows.
+    """
+    for name in package_names:
+        conn.execute(
+            "INSERT OR IGNORE INTO packages (package_name, added_date) VALUES (?, ?)",
+            (name, added_date),
+        )
+    conn.commit()
+
+
 @pytest.fixture
 def temp_db():
     """Create a temporary database file."""

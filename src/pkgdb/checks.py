@@ -122,8 +122,13 @@ def detect_milestones(
     """Return milestones crossed upward between two totals.
 
     A milestone ``m`` is crossed when ``previous_total < m <= current_total``.
-    Only upward crossings are reported, so a rolling-window total dipping back
-    below a threshold does not re-fire on the next rise.
+    Only upward crossings are reported, so a total that dips below a threshold
+    does not re-fire on the next rise.
+
+    That guarantee holds only across the pair of values passed in. Callers
+    wanting it to hold over a package's whole history must pass a high-water
+    mark as ``previous_total`` rather than the previous observation; see
+    :meth:`PackageStatsService.run_checks`.
     """
     if previous_total is None or current_total is None:
         return []

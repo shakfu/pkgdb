@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1]
+
+### Fixed
+
+- Removed and pruned packages no longer appear in stats, reports, exports, or history
+  - `remove` and `sync --prune` deliberately retain a package's collected data so
+    that `cleanup` stays the single physical purge, but the read paths did not
+    filter on the `packages` table -- a removed package kept showing up in
+    `show`, `report`, `export`, `history`, `diff --period latest`, badges, and
+    the `serve` dashboard until `cleanup` was run
+  - `get_latest_stats()`, `get_package_history()`, `get_all_history()`,
+    `get_stats_with_growth()`, and `get_daily_downloads()` gain a `tracked_only`
+    option; `PackageStatsService` enables it on every read, so the database
+    functions keep their raw behavior by default
+- `history` now applies `--since` and `--limit` to the default HTML report
+  - Both flags were parsed and then used only as an empty-data guard before being
+    dropped, so `pkgdb history <package> --since 7d` charted every stored day
+    rather than the last 7; the `--text` and `--json` paths were unaffected
+  - `generate_project_report()` gains `since` and `limit` parameters, and
+    `get_package_history()` gains a `since` filter
+- Milestone crossings can no longer fire twice for the same threshold
+  - `detect_milestones()` only ever compared two adjacent observations, so a
+    total that dipped below a threshold and later rose past it announced the
+    same milestone again
+  - New `milestone_state` table records a per-package high-water mark, which is
+    what crossings are now measured against; `cleanup` clears it, so a re-added
+    package starts its milestone history over
+  - New database functions `get_milestone_high_water()` and
+    `set_milestone_high_water()`
+- `show --info` and `cleanup` now account for the whole schema rather than
+  `package_stats` alone
+  - `get_database_stats()` counted only snapshot rows and dated the database only
+    by them, understating both its size and its historical range once the daily
+    series dominates. It now reports `snapshot_records`, `daily_records`, and
+    `github_history_records`, sums them into `record_count`, and spans the date
+    range across all three
+  - `cleanup_orphaned_stats()` and `prune_old_stats()` reported only the
+    `package_stats` count while deleting from as many as eight tables; both now
+    return per-table counts alongside a `total`
+  - `DatabaseInfo` gains `snapshot_records`, `daily_records`, and
+    `github_history_records`
+- Tags can no longer be attached to untracked packages through the service or
+  database API
+  - `package_tags` has no foreign key, so `add_package_tag()` accepted any name;
+    the tag then appeared in `tags` with a member count but no downloads behind
+    it. The CLI checked membership, but nothing below it did
+  - `add_package_tag()` now raises `ValueError` for an untracked package; new
+    database function `is_tracked()`
+
+### Changed
+
+- **BREAKING**: `PackageStatsService.cleanup()` and `.prune()` return per-table
+  deletion counts (a `dict[str, int]` carrying a `total` entry) instead of a
+  single `int`; `cleanup --json` gains `orphaned_removed_by_table` and
+  `pruned_by_table`, and the text output names the tables it touched
+- Milestones are measured against downloads observed since tracking began -- the
+  accumulated local daily series -- rather than the `package_stats.total` rolling
+  ~180-day window, which could fall back below a threshold as old days aged out
+  - Event wording is now "crossed N observed downloads (now M)", so it no longer
+    reads as a lifetime figure; databases predating the daily series still fall
+    back to snapshot totals
+  - Whatever a package had already accumulated at its first `check` becomes its
+    starting point, so a ~180-day backfill that arrives already past a threshold
+    is not reported as a crossing
+- `show --info` prints a per-table record breakdown beneath the total
+
 ## [0.2.0]
 
 ### Added

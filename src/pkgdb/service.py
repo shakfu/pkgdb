@@ -1,5 +1,6 @@
 """Service layer for pkgdb - provides a clean abstraction over database and API operations."""
 
+import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -36,8 +37,10 @@ from .db import (
     get_cached_python_versions,
     get_daily_downloads,
     get_github_stats_history,
+    get_milestone_high_water,
     get_next_update_seconds,
     get_packages_needing_update,
+    set_milestone_high_water,
     get_pypi_releases,
     get_tags_map,
     store_daily_downloads,
@@ -426,7 +429,9 @@ class PackageStatsService:
         """
         with get_db(self.db_path) as conn:
             stats = (
-                get_stats_with_growth(conn) if with_growth else get_latest_stats(conn)
+                get_stats_with_growth(conn, tracked_only=True)
+                if with_growth
+                else get_latest_stats(conn, tracked_only=True)
             )
             if tag is not None:
                 members = set(get_packages_for_tag(conn, tag))
@@ -438,7 +443,11 @@ class PackageStatsService:
     # -------------------------------------------------------------------------
 
     def add_tag(self, package: str, tag: str) -> bool:
-        """Tag a package. Returns True if added, False if empty/duplicate."""
+        """Tag a package. Returns True if added, False if empty/duplicate.
+
+        Raises:
+            ValueError: If the package is not tracked.
+        """
         with get_db(self.db_path) as conn:
             return add_package_tag(conn, package, tag)
 
@@ -461,7 +470,9 @@ class PackageStatsService:
         """
         with get_db(self.db_path) as conn:
             tags_map = get_tags_map(conn)
-            latest = {s["package_name"]: s for s in get_latest_stats(conn)}
+            latest = {
+                s["package_name"]: s for s in get_latest_stats(conn, tracked_only=True)
+            }
 
         summary: list[dict[str, Any]] = []
         for tag, members in tags_map.items():
@@ -494,7 +505,7 @@ class PackageStatsService:
             List of historical stats ordered by date descending.
         """
         with get_db(self.db_path) as conn:
-            return get_package_history(conn, package, limit=limit)
+            return get_package_history(conn, package, limit=limit, tracked_only=True)
 
     def get_all_history(
         self, limit_per_package: int = 30
@@ -508,7 +519,9 @@ class PackageStatsService:
             Dict mapping package names to their history.
         """
         with get_db(self.db_path) as conn:
-            return get_all_history(conn, limit_per_package=limit_per_package)
+            return get_all_history(
+                conn, limit_per_package=limit_per_package, tracked_only=True
+            )
 
     def get_env_data(
         self, package: str
@@ -547,7 +560,12 @@ class PackageStatsService:
         """
         with get_db(self.db_path) as conn:
             return get_daily_downloads(
-                conn, package, dimension=dimension, category=category, since=since
+                conn,
+                package,
+                dimension=dimension,
+                category=category,
+                since=since,
+                tracked_only=True,
             )
 
     def get_daily_totals(
@@ -601,8 +619,16 @@ class PackageStatsService:
 
         For each package this flags a weekly spike/drop against its trailing
         baseline (from the daily series) and any configured download milestone
-        crossed since the previous fetch (from snapshot totals). Returns the
-        events ordered by package name.
+        newly reached. Returns the events ordered by package name.
+
+        Milestones are measured against *observed downloads*: the sum of the
+        locally stored daily series, which keeps accumulating past the roughly
+        180-day window pypistats serves. That is deliberately not the snapshot
+        ``total`` column, which is itself a rolling window and so can fall back
+        below a threshold as old days age out. Each package also carries a
+        high-water mark, so a metric that dips (through pruning, or through the
+        snapshot fallback's window rolling over) and later recovers cannot
+        announce the same milestone a second time.
 
         Args:
             milestones: Download thresholds to watch (empty/None to skip).
@@ -631,29 +657,67 @@ class PackageStatsService:
                     events.append(anomaly)
 
                 if milestones:
-                    rows = conn.execute(
-                        "SELECT total FROM package_stats WHERE package_name = ? "
-                        "ORDER BY fetch_date DESC LIMIT 2",
-                        (package,),
-                    ).fetchall()
-                    if len(rows) >= 2:
-                        current, previous = rows[0]["total"], rows[1]["total"]
-                        for m in detect_milestones(previous, current, milestones):
+                    current, previous = self._observed_downloads(conn, package, series)
+                    # Before the first check there is no mark to compare
+                    # against, so fall back to the prior observation and report
+                    # the crossing this run actually witnessed.
+                    baseline = get_milestone_high_water(conn, package)
+                    if baseline is None:
+                        baseline = previous
+
+                    if current is not None:
+                        for m in detect_milestones(baseline, current, milestones):
                             events.append(
                                 {
                                     "package": package,
                                     "kind": "milestone",
                                     "milestone": m,
-                                    "total": current or 0,
+                                    "total": current,
                                     "message": (
-                                        f"crossed {m:,} downloads "
-                                        f"(now {current or 0:,})"
+                                        f"crossed {m:,} observed downloads "
+                                        f"(now {current:,})"
                                     ),
                                 }
                             )
+                        set_milestone_high_water(conn, package, current)
 
         events.sort(key=lambda e: (e["package"], e["kind"]))
         return events
+
+    @staticmethod
+    def _observed_downloads(
+        conn: sqlite3.Connection,
+        package: str,
+        series: list[tuple[str, int]],
+    ) -> tuple[int | None, int | None]:
+        """Return ``(current, previous)`` observed download totals for a package.
+
+        "Observed" means every download pkgdb has stored locally, so the figure
+        accumulates across fetches instead of rolling like the pypistats window.
+        It is the running sum of the daily series; ``previous`` is the same sum
+        one day earlier, which gives the first-ever check something to compare
+        against.
+
+        Databases predating the daily series have no such sum, so those fall
+        back to the two most recent snapshot totals as before.
+
+        Returns ``(None, None)`` when the package has no usable data at all.
+        """
+        if series:
+            total = sum(downloads for _, downloads in series)
+            last_day = max(series, key=lambda point: point[0])[1]
+            return total, total - last_day
+
+        rows = conn.execute(
+            "SELECT total FROM package_stats WHERE package_name = ? "
+            "ORDER BY fetch_date DESC LIMIT 2",
+            (package,),
+        ).fetchall()
+        if not rows:
+            return None, None
+        current = rows[0]["total"]
+        previous = rows[1]["total"] if len(rows) >= 2 else None
+        return current, previous
 
     # -------------------------------------------------------------------------
     # Reporting
@@ -687,11 +751,11 @@ class PackageStatsService:
             raise ValueError(error_msg)
 
         with get_db(self.db_path) as conn:
-            stats = get_stats_with_growth(conn)
+            stats = get_stats_with_growth(conn, tracked_only=True)
             if not stats:
                 return False
 
-            all_history = get_all_history(conn, limit_per_package=30)
+            all_history = get_all_history(conn, limit_per_package=30, tracked_only=True)
             packages = [s["package_name"] for s in stats]
 
             env_summary = get_cached_env_summary(conn) if include_env else None
@@ -734,7 +798,7 @@ class PackageStatsService:
             raise ValueError(error_msg)
 
         with get_db(self.db_path) as conn:
-            history = get_package_history(conn, package, limit=30)
+            history = get_package_history(conn, package, limit=30, tracked_only=True)
             py_versions = get_cached_python_versions(conn, package)
             os_data = get_cached_os_stats(conn, package)
 
@@ -818,7 +882,13 @@ class PackageStatsService:
 
         return pypi, gh
 
-    def generate_project_report(self, package: str, output_file: str) -> bool:
+    def generate_project_report(
+        self,
+        package: str,
+        output_file: str,
+        since: str | None = None,
+        limit: int = 90,
+    ) -> bool:
         """Generate a project view HTML report for a single package.
 
         Shows download history with release markers, release timeline,
@@ -827,6 +897,10 @@ class PackageStatsService:
         Args:
             package: Package name.
             output_file: Path to write HTML file.
+            since: Restrict both the daily series and the snapshot history to
+                dates on or after this ``YYYY-MM-DD`` date. None charts
+                everything stored.
+            limit: Maximum number of snapshots in the fallback history table.
 
         Returns:
             True if report was generated.
@@ -841,9 +915,16 @@ class PackageStatsService:
             raise ValueError(error_msg)
 
         with get_db(self.db_path) as conn:
-            history = get_package_history(conn, package, limit=90)
+            history = get_package_history(
+                conn, package, limit=limit, since=since, tracked_only=True
+            )
             daily_series = get_daily_downloads(
-                conn, package, dimension="overall", category="without_mirrors"
+                conn,
+                package,
+                dimension="overall",
+                category="without_mirrors",
+                since=since,
+                tracked_only=True,
             )
             py_versions = get_cached_python_versions(conn, package)
             os_data = get_cached_os_stats(conn, package)
@@ -1061,27 +1142,29 @@ class PackageStatsService:
     # Maintenance
     # -------------------------------------------------------------------------
 
-    def cleanup(self) -> tuple[int, int]:
+    def cleanup(self) -> tuple[dict[str, int], int]:
         """Clean up orphaned stats and return counts.
 
-        Removes stats for packages that are no longer being tracked.
+        Removes every stored row belonging to packages that are no longer
+        tracked. This is the physical purge that `remove_package` defers.
 
         Returns:
-            Tuple of (orphaned_deleted, packages_remaining).
+            Tuple of (rows deleted per table including a ``total`` entry,
+            packages_remaining).
         """
         with get_db(self.db_path) as conn:
             orphaned = cleanup_orphaned_stats(conn)
             packages = get_packages(conn)
             return orphaned, len(packages)
 
-    def prune(self, days: int = 365) -> int:
+    def prune(self, days: int = 365) -> dict[str, int]:
         """Remove stats older than the specified number of days.
 
         Args:
             days: Delete stats older than this many days.
 
         Returns:
-            Number of records deleted.
+            Rows deleted per table, plus a ``total`` entry summing them.
         """
         with get_db(self.db_path) as conn:
             return prune_old_stats(conn, days)
@@ -1102,6 +1185,9 @@ class PackageStatsService:
         return DatabaseInfo(
             package_count=stats["package_count"],
             record_count=stats["record_count"],
+            snapshot_records=stats["snapshot_records"],
+            daily_records=stats["daily_records"],
+            github_history_records=stats["github_history_records"],
             first_fetch=stats["first_fetch"],
             last_fetch=stats["last_fetch"],
             db_size_bytes=db_size,

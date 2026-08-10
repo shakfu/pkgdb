@@ -13,7 +13,7 @@ It retrieves data through the pypistats and GitHub APIs, storing it as historica
 - **Terminal views** - `show` (trend sparklines and growth %), `diff` (previous fetch / exact week-over-week / month-over-month), `stats` (Python version and OS breakdown).
 - **HTML reports** - download charts with a release-timeline overlay (PyPI and GitHub), environment distribution, and per-package project views.
 - **Interactive web dashboard** (`serve`) - live from SQLite, with zoomable download and GitHub-stars charts, release markers, and multi-package comparison. No Flask/FastAPI dependency.
-- **Anomaly and milestone alerts** (`check`) - weekly spike/drop detection and download-milestone crossings, exiting non-zero for shell/CI notifiers.
+- **Anomaly and milestone alerts** (`check`) - weekly spike/drop detection and download-milestone crossings, exiting non-zero for shell/CI notifiers. Milestones measure downloads observed since tracking began and fire once each.
 - **Package tags / portfolio rollups** - group related packages and view aggregate download stats per group.
 - **GitHub integration** - repository stats (stars, forks, activity, language), a daily metrics snapshot with star-growth tracking, and release history.
 - **Export and badges** - CSV / JSON / Markdown export, shields.io-style SVG badges, and machine-readable `--json` on most commands.
@@ -308,7 +308,7 @@ Modular CLI application with the following commands:
 - **fetch**: Fetch download stats from PyPI and store in SQLite (with `-g` for GitHub stats). Also backfills roughly 180 days of true daily downloads per package on the first fetch
 - **show**: Display stats in terminal with trend sparklines and growth %; `--tag` filters to a group with an aggregate total
 - **diff**: Compare download stats between time periods (previous fetch, week-over-week, month-over-month). Week/month comparisons use exact daily sums
-- **check**: Detect download anomalies (weekly spikes/drops) and milestone crossings; exits non-zero on any event for CI/notifier use
+- **check**: Detect download anomalies (weekly spikes/drops) and milestone crossings; exits non-zero on any event for CI/notifier use. Milestones track downloads observed since tracking began (the accumulated daily series, not a lifetime total) and each one is announced once
 - **history**: Show package history as HTML report (default) or text table (`--text`), using the true daily download series
 - **stats**: Show detailed breakdown (Python versions, OS) for a package
 - **releases**: Show release history for a package (PyPI and GitHub)

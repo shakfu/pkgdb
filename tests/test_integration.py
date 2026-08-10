@@ -223,14 +223,16 @@ class TestErrorPaths:
         """Service cleanup should work on empty database."""
         service = PackageStatsService(temp_db)
         orphaned, remaining = service.cleanup()
-        assert orphaned == 0
+        assert orphaned["total"] == 0
+        assert set(orphaned.values()) == {0}
         assert remaining == 0
 
     def test_service_prune_no_old_data(self, temp_db):
         """Service prune should work when no old data exists."""
         service = PackageStatsService(temp_db)
         deleted = service.prune(days=30)
-        assert deleted == 0
+        assert deleted["total"] == 0
+        assert set(deleted.values()) == {0}
 
 
 @pytest.mark.slow

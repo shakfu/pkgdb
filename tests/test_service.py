@@ -9,12 +9,16 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import track
 from pkgdb import (
     get_db_connection,
     get_db,
     init_db,
     add_package,
     store_stats,
+    store_daily_downloads,
+    get_package_history,
+    get_latest_stats,
     PackageStatsService,
     PackageInfo,
     FetchResult,
@@ -316,6 +320,7 @@ class TestPackageStatsService:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         stats = service.get_stats()
@@ -336,6 +341,7 @@ class TestPackageStatsService:
             ('test-pkg', '2024-01-02', 20, 140, 600, 2000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         history = service.get_history("test-pkg", limit=10)
@@ -353,6 +359,7 @@ class TestPackageStatsService:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         # CSV
@@ -388,6 +395,7 @@ class TestPackageStatsService:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with pytest.raises(ValueError, match="Unknown format"):
@@ -437,6 +445,7 @@ class TestPackageStatsService:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with tempfile.NamedTemporaryFile(
@@ -636,6 +645,7 @@ class TestServicePathValidation:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".html", delete=False) as f:
@@ -872,3 +882,285 @@ class TestServiceGithubStats:
         assert stats["total"] == 0
         assert stats["valid"] == 0
         assert stats["expired"] == 0
+
+
+class TestRemovedPackageVisibility:
+    """Removed packages must disappear from tracked-package views at once.
+
+    `remove_package()` deliberately retains a package's collected statistics so
+    that `cleanup` stays the single physical purge. That retention is only safe
+    if the ordinary read paths scope themselves to the `packages` table, so
+    these tests pin that scoping rather than the data being deleted.
+    """
+
+    def _seed(self, temp_db):
+        """Track two packages with snapshot and daily data, then drop one."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        conn.execute("""
+            INSERT INTO package_stats
+            (package_name, fetch_date, last_day, last_week, last_month, total)
+            VALUES
+            ('keep-pkg', '2024-01-01', 10, 70, 300, 1000),
+            ('keep-pkg', '2024-01-02', 11, 77, 330, 1100),
+            ('drop-pkg', '2024-01-01', 20, 140, 600, 9000),
+            ('drop-pkg', '2024-01-02', 22, 154, 660, 9900)
+        """)
+        for pkg in ("keep-pkg", "drop-pkg"):
+            store_daily_downloads(conn, pkg, [
+                {
+                    "date": "2024-01-01",
+                    "dimension": "overall",
+                    "category": "without_mirrors",
+                    "downloads": 500,
+                }
+            ])
+        track(conn, "keep-pkg", "drop-pkg")
+        conn.close()
+
+        service = PackageStatsService(temp_db)
+        assert service.remove_package("drop-pkg") is True
+        return service
+
+    def test_removed_package_absent_from_stats(self, temp_db):
+        """get_stats should drop the removed package, with and without growth."""
+        service = self._seed(temp_db)
+
+        names = [s["package_name"] for s in service.get_stats()]
+        assert names == ["keep-pkg"]
+
+        grown = [s["package_name"] for s in service.get_stats(with_growth=True)]
+        assert grown == ["keep-pkg"]
+
+    def test_removed_package_absent_from_history(self, temp_db):
+        """Both the per-package and all-package history views should skip it."""
+        service = self._seed(temp_db)
+
+        assert service.get_history("drop-pkg") == []
+        assert service.get_history("keep-pkg") != []
+        assert sorted(service.get_all_history()) == ["keep-pkg"]
+
+    def test_removed_package_absent_from_daily_series(self, temp_db):
+        """The daily series backs history HTML and diff, so it must scope too."""
+        service = self._seed(temp_db)
+
+        assert service.get_daily_totals("drop-pkg") == []
+        assert service.get_daily_totals("keep-pkg") != []
+
+    def test_removed_package_absent_from_exports(self, temp_db):
+        """Every export format reads through get_stats, so none may leak it."""
+        service = self._seed(temp_db)
+
+        csv_output = service.export("csv")
+        assert "keep-pkg" in csv_output
+        assert "drop-pkg" not in csv_output
+
+        data = json.loads(service.export("json"))
+        assert [p["name"] for p in data["packages"]] == ["keep-pkg"]
+
+        assert "drop-pkg" not in service.export("markdown")
+
+    def test_removed_package_absent_from_report(self, temp_db):
+        """The dashboard report must not render the removed package."""
+        service = self._seed(temp_db)
+
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            output_path = f.name
+        try:
+            assert service.generate_report(output_path) is True
+            content = Path(output_path).read_text()
+            assert "keep-pkg" in content
+            assert "drop-pkg" not in content
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
+    def test_removed_package_absent_from_badge(self, temp_db):
+        """Badges resolve through get_stats and should report no data."""
+        service = self._seed(temp_db)
+
+        assert service.generate_badge("drop-pkg") is None
+        assert service.generate_badge("keep-pkg") is not None
+
+    def test_retained_rows_survive_until_cleanup(self, temp_db):
+        """Hiding the package must not silently delete its retained history."""
+        service = self._seed(temp_db)
+
+        with get_db(temp_db) as conn:
+            assert get_package_history(conn, "drop-pkg") != []
+            assert get_latest_stats(conn, tracked_only=False) != []
+
+        service.cleanup()
+
+        with get_db(temp_db) as conn:
+            assert get_package_history(conn, "drop-pkg") == []
+
+
+class TestMilestoneSemantics:
+    """Milestones measure accumulated observed downloads, and fire once.
+
+    The snapshot `total` column is a rolling ~180-day window, so a package can
+    fall back below a threshold and rise past it again. These tests pin the
+    metric that replaced it and the once-only guarantee around it.
+    """
+
+    @staticmethod
+    def _seed_daily(temp_db, package, values, start="2026-01-05"):
+        """Give a package one daily row per value, starting at `start`."""
+        d0 = datetime.strptime(start, "%Y-%m-%d").date()
+        rows = [
+            {
+                "date": (d0 + timedelta(days=i)).isoformat(),
+                "dimension": "overall",
+                "category": "without_mirrors",
+                "downloads": v,
+            }
+            for i, v in enumerate(values)
+        ]
+        with get_db(temp_db) as conn:
+            add_package(conn, package)
+            store_daily_downloads(conn, package, rows)
+
+    @staticmethod
+    def _milestones(events):
+        return [e for e in events if e["kind"] == "milestone"]
+
+    def test_milestone_uses_accumulated_daily_total(self, temp_db):
+        """The metric is the sum of the daily series, not the snapshot total."""
+        service = PackageStatsService(temp_db)
+        # 960 accumulated, then a day that carries the run past 1000.
+        self._seed_daily(temp_db, "my-pkg", [40] * 24 + [80])
+        # A snapshot total far below the threshold must not suppress the event.
+        with get_db(temp_db) as conn:
+            store_stats(
+                conn,
+                "my-pkg",
+                {"last_day": 80, "last_week": 280, "last_month": 1040, "total": 300},
+            )
+
+        crossed = self._milestones(service.run_checks(milestones=[1000]))
+        assert len(crossed) == 1
+        assert crossed[0]["milestone"] == 1000
+        assert crossed[0]["total"] == 1040
+
+    def test_first_check_does_not_replay_backfilled_history(self, temp_db):
+        """A backfill can arrive already past a threshold; that is not a crossing.
+
+        The first fetch backfills ~180 days at once, so every milestone under
+        that figure would otherwise fire in a burst for downloads pkgdb never
+        watched happen.
+        """
+        service = PackageStatsService(temp_db)
+        self._seed_daily(temp_db, "my-pkg", [40] * 30)  # 1200 already accumulated
+
+        assert self._milestones(service.run_checks(milestones=[1000])) == []
+
+        # It still fires for a threshold genuinely crossed later on.
+        self._seed_daily(temp_db, "my-pkg", [4000], start="2026-03-01")
+        crossed = self._milestones(service.run_checks(milestones=[1000, 5000]))
+        assert [e["milestone"] for e in crossed] == [5000]
+
+    def test_milestone_fires_only_once(self, temp_db):
+        """A second check over unchanged data must not repeat the event."""
+        service = PackageStatsService(temp_db)
+        self._seed_daily(temp_db, "my-pkg", [40] * 24 + [80])
+
+        first = self._milestones(service.run_checks(milestones=[1000]))
+        second = self._milestones(service.run_checks(milestones=[1000]))
+        assert len(first) == 1
+        assert second == []
+
+    def test_milestone_does_not_refire_after_a_dip(self, temp_db):
+        """The regression: a rolling metric dipping and recovering re-fired.
+
+        `detect_milestones` only ever compared two adjacent observations, so a
+        total that fell back under the threshold could cross it a second time.
+        The persisted high-water mark makes the guarantee hold for good.
+        """
+        service = PackageStatsService(temp_db)
+
+        def add_snapshots(*pairs):
+            with get_db(temp_db) as conn:
+                for date, total in pairs:
+                    conn.execute(
+                        "INSERT INTO package_stats (package_name, fetch_date,"
+                        " last_day, last_week, last_month, total)"
+                        " VALUES (?, ?, 1, 1, 1, ?)",
+                        ("my-pkg", date, total),
+                    )
+                conn.commit()
+
+        # No daily series, so checks fall back to snapshot totals.
+        with get_db(temp_db) as conn:
+            add_package(conn, "my-pkg")
+        add_snapshots(("2026-03-01", 900), ("2026-04-01", 1100))
+        assert len(self._milestones(service.run_checks(milestones=[1000]))) == 1
+
+        # Old days age out of the window, then traffic pushes it back over.
+        add_snapshots(("2026-05-01", 950), ("2026-06-01", 1200))
+        assert self._milestones(service.run_checks(milestones=[1000])) == []
+
+    def test_high_water_mark_survives_pruning(self, temp_db):
+        """Pruning shrinks the daily series; that must not re-arm a milestone."""
+        service = PackageStatsService(temp_db)
+        self._seed_daily(temp_db, "my-pkg", [40] * 24 + [80])
+        assert len(self._milestones(service.run_checks(milestones=[1000]))) == 1
+
+        with get_db(temp_db) as conn:
+            conn.execute("DELETE FROM daily_downloads WHERE date < '2026-01-20'")
+            conn.commit()
+        # Fresh accumulation climbs back over the threshold from a lower base.
+        self._seed_daily(temp_db, "my-pkg", [200] * 5, start="2026-02-01")
+
+        assert self._milestones(service.run_checks(milestones=[1000])) == []
+
+    def test_message_names_the_metric(self, temp_db):
+        """Wording must not imply a lifetime figure pkgdb cannot observe."""
+        service = PackageStatsService(temp_db)
+        self._seed_daily(temp_db, "my-pkg", [40] * 24 + [80])
+
+        event = self._milestones(service.run_checks(milestones=[1000]))[0]
+        assert event["message"] == "crossed 1,000 observed downloads (now 1,040)"
+
+
+class TestTagMembershipEnforcement:
+    """Tags may only attach to tracked packages, enforced below the CLI.
+
+    `package_tags` has no foreign key, so nothing in SQLite stops a tag row
+    pointing at a package that was never added. Such a tag then appears in the
+    tag rollup with a package count but no downloads behind it.
+    """
+
+    def test_service_rejects_tagging_untracked_package(self, temp_db):
+        """The CLI checks this too, but the service must not depend on that."""
+        service = PackageStatsService(temp_db)
+
+        with pytest.raises(ValueError, match="not tracked"):
+            service.add_tag("never-added", "web")
+
+        assert service.get_tag_summary() == []
+
+    def test_tagging_works_for_tracked_package(self, temp_db):
+        """The guard must not get in the way of the normal path."""
+        service = PackageStatsService(temp_db)
+        service.add_package("my-pkg", verify=False)
+
+        assert service.add_tag("my-pkg", "web") is True
+        assert service.add_tag("my-pkg", "web") is False  # duplicate
+        assert service.get_package_tags("my-pkg") == ["web"]
+
+    def test_removed_package_cannot_be_retagged(self, temp_db):
+        """Removal must close the door again, not just clear existing tags."""
+        service = PackageStatsService(temp_db)
+        service.add_package("my-pkg", verify=False)
+        service.add_tag("my-pkg", "web")
+        service.remove_package("my-pkg")
+
+        with pytest.raises(ValueError, match="not tracked"):
+            service.add_tag("my-pkg", "web")
+
+    def test_empty_tag_still_rejected_without_raising(self, temp_db):
+        """An empty tag is a benign no-op, not a membership error."""
+        service = PackageStatsService(temp_db)
+        service.add_package("my-pkg", verify=False)
+
+        assert service.add_tag("my-pkg", "   ") is False

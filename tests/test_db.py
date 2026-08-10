@@ -1512,3 +1512,119 @@ def _make_github_api_response(**overrides):
     }
     defaults.update(overrides)
     return defaults
+
+
+class TestMaintenanceReporting:
+    """Counts must describe the whole schema, not just `package_stats`.
+
+    Most of a mature database is the daily series and the GitHub history, so
+    reporting the snapshot table alone understates both how much is stored and
+    how much a maintenance command removed.
+    """
+
+    def _seed(self, db_conn):
+        """Track one package and orphan another, both with data in every table."""
+        from pkgdb import store_daily_downloads, store_github_stats_snapshot
+
+        add_package(db_conn, "kept")
+        for pkg in ("kept", "orphan"):
+            db_conn.execute(
+                "INSERT INTO package_stats (package_name, fetch_date, last_day,"
+                " last_week, last_month, total) VALUES (?, '2024-01-01', 1, 1, 1, 1)",
+                (pkg,),
+            )
+            store_daily_downloads(db_conn, pkg, [
+                {
+                    "date": f"2024-01-0{i}",
+                    "dimension": "overall",
+                    "category": "without_mirrors",
+                    "downloads": 10,
+                }
+                for i in range(1, 4)
+            ])
+            store_github_stats_snapshot(db_conn, pkg, "o/r", 1, 1, 1, 1)
+        db_conn.commit()
+
+    def test_database_stats_counts_every_history_table(self, db_conn):
+        """record_count should cover daily and GitHub rows, not just snapshots."""
+        self._seed(db_conn)
+
+        stats = get_database_stats(db_conn)
+        assert stats["snapshot_records"] == 2
+        assert stats["daily_records"] == 6
+        assert stats["github_history_records"] == 2
+        assert stats["record_count"] == 10
+
+    def test_database_stats_date_range_spans_daily_series(self, db_conn):
+        """The daily series reaches back further than the snapshot table."""
+        from pkgdb import store_daily_downloads
+
+        add_package(db_conn, "pkg")
+        db_conn.execute(
+            "INSERT INTO package_stats (package_name, fetch_date, last_day,"
+            " last_week, last_month, total) VALUES ('pkg', '2024-06-01', 1, 1, 1, 1)"
+        )
+        store_daily_downloads(db_conn, "pkg", [
+            {
+                "date": "2024-01-15",
+                "dimension": "overall",
+                "category": "without_mirrors",
+                "downloads": 10,
+            }
+        ])
+        db_conn.commit()
+
+        stats = get_database_stats(db_conn)
+        assert stats["first_fetch"] == "2024-01-15"
+        assert stats["last_fetch"] == "2024-06-01"
+
+    def test_cleanup_reports_every_table_it_touched(self, db_conn):
+        """The return value must account for all of the orphan's rows."""
+        self._seed(db_conn)
+
+        deleted = cleanup_orphaned_stats(db_conn)
+        assert deleted["package_stats"] == 1
+        assert deleted["daily_downloads"] == 3
+        assert deleted["github_stats_history"] == 1
+        assert deleted["total"] == 5
+
+        # The tracked package keeps everything.
+        assert get_database_stats(db_conn)["record_count"] == 5
+
+    def test_cleanup_clears_milestone_state(self, db_conn):
+        """A re-added package should not inherit a stale high-water mark."""
+        from pkgdb import get_milestone_high_water, set_milestone_high_water
+
+        add_package(db_conn, "kept")
+        set_milestone_high_water(db_conn, "kept", 500)
+        set_milestone_high_water(db_conn, "orphan", 900)
+
+        cleanup_orphaned_stats(db_conn)
+
+        assert get_milestone_high_water(db_conn, "kept") == 500
+        assert get_milestone_high_water(db_conn, "orphan") is None
+
+    def test_prune_reports_every_table_it_touched(self, db_conn):
+        """Pruning is dominated by the daily series, so it must be counted."""
+        from pkgdb import store_daily_downloads
+
+        add_package(db_conn, "pkg")
+        db_conn.execute(
+            "INSERT INTO package_stats (package_name, fetch_date, last_day,"
+            " last_week, last_month, total) VALUES ('pkg', '2000-01-01', 1, 1, 1, 1)"
+        )
+        store_daily_downloads(db_conn, "pkg", [
+            {
+                "date": f"2000-01-0{i}",
+                "dimension": "overall",
+                "category": "without_mirrors",
+                "downloads": 10,
+            }
+            for i in range(1, 5)
+        ])
+        db_conn.commit()
+
+        deleted = prune_old_stats(db_conn, days=30)
+        assert deleted["package_stats"] == 1
+        assert deleted["daily_downloads"] == 4
+        assert deleted["total"] == 5

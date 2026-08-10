@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from conftest import track
 from pkgdb import (
     get_db_connection,
     get_db,
@@ -17,6 +18,7 @@ from pkgdb import (
     add_package,
     get_packages,
     store_stats,
+    store_daily_downloads,
     record_fetch_attempt,
     load_packages,
     get_config_dir,
@@ -244,6 +246,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "show"]):
@@ -262,6 +265,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with tempfile.NamedTemporaryFile(
@@ -292,6 +296,7 @@ class TestCLI:
             ('test-pkg', '2024-01-02', 20, 140, 600, 2000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "test-pkg", "--text"]):
@@ -323,6 +328,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "csv"]):
@@ -342,6 +348,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "json"]):
@@ -361,6 +368,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "export", "-f", "markdown"]):
@@ -380,6 +388,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
@@ -484,6 +493,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with tempfile.NamedTemporaryFile(
@@ -573,6 +583,7 @@ class TestCLI:
                 VALUES ('pkg-{i}', '2024-01-01', {i*10}, {i*70}, {i*300}, {i*1000 + 1000})
             """)
         conn.commit()
+        track(conn, *[f"pkg-{i}" for i in range(5)])
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--limit", "3"]):
@@ -599,6 +610,7 @@ class TestCLI:
             ('high-day', '2024-01-01', 500, 70, 300, 3000)
         """)
         conn.commit()
+        track(conn, "high-total", "high-month", "high-day")
         conn.close()
 
         # Sort by month
@@ -621,6 +633,7 @@ class TestCLI:
             VALUES ('test-pkg', '2024-01-01', 10, 70, 300, 1000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "show", "--json"]):
@@ -649,6 +662,7 @@ class TestCLI:
             ('test-pkg', '2024-01-10', 30, 210, 900, 3000)
         """)
         conn.commit()
+        track(conn, "test-pkg")
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "history", "test-pkg", "--text", "--since", "2024-01-05"]):
@@ -1885,7 +1899,7 @@ class TestCheckCommand:
         assert data == [{
             "package": "my-pkg", "kind": "milestone",
             "milestone": 1000, "total": 1100,
-            "message": "crossed 1,000 downloads (now 1,100)",
+            "message": "crossed 1,000 observed downloads (now 1,100)",
         }]
 
 
@@ -2178,3 +2192,102 @@ class TestHistoryDailySeries:
         assert "Daily Downloads &amp; Releases" in html or \
                "Daily Downloads & Releases" in html
         Path(output).unlink(missing_ok=True)
+
+
+class TestHistoryHtmlFiltering:
+    """`history` defaults to HTML, so --since/--limit must reach that path.
+
+    The text and JSON paths filter in the command itself; the HTML path renders
+    through generate_project_report, which previously charted every stored day
+    regardless of the flags the user passed.
+    """
+
+    def _seed(self, temp_db, days=12):
+        """Track a package with one daily row per day from 2024-01-01."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        rows = []
+        for i in range(days):
+            date = f"2024-01-{i + 1:02d}"
+            rows.append({
+                "date": date,
+                "dimension": "overall",
+                "category": "without_mirrors",
+                "downloads": 100 + i,
+            })
+            conn.execute(
+                "INSERT INTO package_stats (package_name, fetch_date, last_day,"
+                " last_week, last_month, total) VALUES (?, ?, ?, ?, ?, ?)",
+                ("test-pkg", date, 10, 70, 300, 1000 + i),
+            )
+        store_daily_downloads(conn, "test-pkg", rows)
+        track(conn, "test-pkg")
+        conn.close()
+
+    def _run_history(self, temp_db, extra_args):
+        """Run `history` in its default HTML mode and return the HTML."""
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            output_path = f.name
+        try:
+            argv = ["pkgdb", "-d", temp_db, "history", "test-pkg",
+                    "-o", output_path, "--no-browser"] + extra_args
+            with patch("sys.argv", argv):
+                with patch(
+                    "pkgdb.service.PackageStatsService.fetch_package_releases",
+                    return_value=([], []),
+                ):
+                    with patch("pkgdb.reports.fetch_python_versions", return_value=None):
+                        with patch("pkgdb.reports.fetch_os_stats", return_value=None):
+                            main()
+            return Path(output_path).read_text()
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
+    def test_html_history_honors_since(self, temp_db):
+        """--since should trim the charted daily series, not just the guard."""
+        self._seed(temp_db)
+        content = self._run_history(temp_db, ["--since", "2024-01-10"])
+
+        assert "2024-01-10" in content
+        assert "2024-01-12" in content
+        assert "2024-01-01" not in content
+        assert "2024-01-09" not in content
+
+    def test_html_history_honors_relative_since(self, temp_db):
+        """Relative forms like 7d are what the README documents."""
+        self._seed(temp_db)
+        # Everything seeded is well before today, so a 7d window charts nothing
+        # and the command should report no data rather than a full-range report.
+        with tempfile.NamedTemporaryFile(suffix=".html", delete=False) as f:
+            output_path = f.name
+        try:
+            argv = ["pkgdb", "-d", temp_db, "history", "test-pkg",
+                    "-o", output_path, "--no-browser", "--since", "7d"]
+            with patch("sys.argv", argv):
+                main()
+            assert not Path(output_path).read_text()
+        finally:
+            Path(output_path).unlink(missing_ok=True)
+
+    def test_html_history_without_since_charts_everything(self, temp_db):
+        """Absent --since the report keeps its full-range behavior."""
+        self._seed(temp_db)
+        content = self._run_history(temp_db, [])
+
+        assert "2024-01-01" in content
+        assert "2024-01-12" in content
+
+    def test_html_history_honors_limit_for_snapshots(self, temp_db):
+        """--limit caps the snapshot series the report falls back to."""
+        self._seed(temp_db)
+        # Drop the daily series so the report must use snapshot history.
+        conn = get_db_connection(temp_db)
+        conn.execute("DELETE FROM daily_downloads")
+        conn.commit()
+        conn.close()
+
+        content = self._run_history(temp_db, ["--limit", "3"])
+
+        assert "2024-01-12" in content
+        assert "2024-01-10" in content
+        assert "2024-01-01" not in content

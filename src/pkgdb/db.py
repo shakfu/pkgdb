@@ -27,6 +27,11 @@ def get_config_dir() -> Path:
 DEFAULT_DB_FILE = str(get_config_dir() / "pkg.db")
 DEFAULT_REPORT_FILE = str(get_config_dir() / "report.html")
 
+# Membership predicate used by the `tracked_only` read options. Package-owned
+# data outlives `remove_package()` so that `cleanup` stays the single physical
+# purge, which means tracked-package views have to filter on this explicitly.
+_TRACKED_SCOPE = "package_name IN (SELECT package_name FROM packages)"
+
 
 def get_db_connection(db_path: str) -> sqlite3.Connection:
     """Create and return a database connection."""
@@ -198,6 +203,13 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_package_tags_tag
         ON package_tags(tag)
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS milestone_state (
+            package_name TEXT PRIMARY KEY,
+            high_water INTEGER NOT NULL,
+            updated_date TEXT NOT NULL
+        )
+    """)
     conn.commit()
 
 
@@ -251,14 +263,31 @@ def normalize_tag(tag: str) -> str:
     return tag.strip().lower()
 
 
+def is_tracked(conn: sqlite3.Connection, package_name: str) -> bool:
+    """Return whether a package is currently tracked."""
+    cursor = conn.execute(
+        "SELECT 1 FROM packages WHERE package_name = ?",
+        (package_name,),
+    )
+    return cursor.fetchone() is not None
+
+
 def add_package_tag(conn: sqlite3.Connection, package_name: str, tag: str) -> bool:
     """Tag a package for grouping.
 
     Returns True if the tag was added, False if it was empty or already present.
+
+    Raises:
+        ValueError: If the package is not tracked. `package_tags` carries no
+            foreign key, so membership is enforced here rather than by SQLite;
+            without it a tag can be attached to a package that has no stats,
+            and it then shows up in `get_tag_summary` contributing nothing.
     """
     normalized = normalize_tag(tag)
     if not normalized:
         return False
+    if not is_tracked(conn, package_name):
+        raise ValueError(f"Package '{package_name}' is not tracked")
     try:
         conn.execute(
             "INSERT INTO package_tags (package_name, tag) VALUES (?, ?)",
@@ -486,6 +515,7 @@ def get_daily_downloads(
     dimension: str = "overall",
     category: str | None = None,
     since: str | None = None,
+    tracked_only: bool = False,
 ) -> list[DailyDownload]:
     """Return a package's stored daily download series, ordered by date.
 
@@ -496,6 +526,8 @@ def get_daily_downloads(
         category: Restrict to a single category (e.g. ``"without_mirrors"`` or
             ``"3.12"``). If None, all categories in the dimension are returned.
         since: Only include rows on or after this ``YYYY-MM-DD`` date.
+        tracked_only: Return nothing when the package is no longer tracked; see
+            :func:`get_latest_stats` for why that is not the default.
 
     Returns:
         List of daily records (possibly empty), ordered by date then category.
@@ -505,6 +537,8 @@ def get_daily_downloads(
         "WHERE package_name = ? AND dimension = ?",
     ]
     params: list[Any] = [package_name, dimension]
+    if tracked_only:
+        query.append(f"AND {_TRACKED_SCOPE}")
     if category is not None:
         query.append("AND category = ?")
         params.append(category)
@@ -700,9 +734,21 @@ def store_stats_batch(
     return count
 
 
-def get_latest_stats(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    """Get the most recent stats for all packages, ordered by total downloads."""
-    cursor = conn.execute("""
+def get_latest_stats(
+    conn: sqlite3.Connection, tracked_only: bool = False
+) -> list[dict[str, Any]]:
+    """Get the most recent stats for all packages, ordered by total downloads.
+
+    Args:
+        conn: Database connection.
+        tracked_only: Restrict results to packages still listed in ``packages``.
+            Removing or pruning a package deliberately retains its collected
+            statistics until ``cleanup`` runs, so tracked-package views must set
+            this to avoid showing untracked leftovers. Defaults to False, which
+            reads the stored rows as-is.
+    """
+    scope = f"WHERE ps.{_TRACKED_SCOPE}" if tracked_only else ""
+    cursor = conn.execute(f"""
         SELECT ps.*
         FROM package_stats ps
         INNER JOIN (
@@ -711,36 +757,67 @@ def get_latest_stats(conn: sqlite3.Connection) -> list[dict[str, Any]]:
             GROUP BY package_name
         ) latest ON ps.package_name = latest.package_name
                 AND ps.fetch_date = latest.max_date
+        {scope}
         ORDER BY ps.total DESC
     """)
     return [dict(row) for row in cursor.fetchall()]
 
 
 def get_package_history(
-    conn: sqlite3.Connection, package_name: str, limit: int = 30
+    conn: sqlite3.Connection,
+    package_name: str,
+    limit: int = 30,
+    since: str | None = None,
+    tracked_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """Get historical stats for a specific package, ordered by date descending."""
+    """Get historical stats for a specific package, ordered by date descending.
+
+    Args:
+        conn: Database connection.
+        package_name: Name of the package.
+        limit: Maximum number of snapshots to return.
+        since: Only include snapshots fetched on or after this ``YYYY-MM-DD``
+            date, matching the filter :func:`get_daily_downloads` applies to
+            the daily series.
+        tracked_only: Return nothing for a package that is no longer tracked;
+            see :func:`get_latest_stats` for why that is not the default.
+    """
+    scope = f"AND {_TRACKED_SCOPE}" if tracked_only else ""
+    date_filter = "AND fetch_date >= ?" if since is not None else ""
+    params: list[Any] = [package_name]
+    if since is not None:
+        params.append(since)
+    params.append(limit)
+
     cursor = conn.execute(
-        """
+        f"""
         SELECT * FROM package_stats
         WHERE package_name = ?
+        {scope}
+        {date_filter}
         ORDER BY fetch_date DESC
         LIMIT ?
     """,
-        (package_name, limit),
+        params,
     )
     return [dict(row) for row in cursor.fetchall()]
 
 
 def get_all_history(
-    conn: sqlite3.Connection, limit_per_package: int = 30
+    conn: sqlite3.Connection, limit_per_package: int = 30, tracked_only: bool = False
 ) -> dict[str, list[dict[str, Any]]]:
-    """Get historical stats for all packages, grouped by package name."""
+    """Get historical stats for all packages, grouped by package name.
+
+    Set ``tracked_only`` to omit packages that are no longer tracked; see
+    :func:`get_latest_stats` for why that is not the default.
+    """
+    scope = f"WHERE {_TRACKED_SCOPE}" if tracked_only else ""
     cursor = conn.execute(
-        """
+        f"""
         SELECT * FROM (
             SELECT *, ROW_NUMBER() OVER (PARTITION BY package_name ORDER BY fetch_date DESC) as rn
             FROM package_stats
+            {scope}
         ) WHERE rn <= ?
         ORDER BY package_name, fetch_date ASC
     """,
@@ -757,17 +834,20 @@ def get_all_history(
     return history
 
 
-def get_stats_with_growth(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def get_stats_with_growth(
+    conn: sqlite3.Connection, tracked_only: bool = False
+) -> list[dict[str, Any]]:
     """Get latest stats with week-over-week and month-over-month growth metrics.
 
     Uses a single query to fetch all history, avoiding N+1 query pattern.
+    ``tracked_only`` is forwarded to the underlying reads.
     """
-    stats = get_latest_stats(conn)
+    stats = get_latest_stats(conn, tracked_only=tracked_only)
     if not stats:
         return stats
 
     # Fetch all history in ONE query instead of N queries
-    all_history = get_all_history(conn, limit_per_package=31)
+    all_history = get_all_history(conn, limit_per_package=31, tracked_only=tracked_only)
 
     for s in stats:
         pkg = s["package_name"]
@@ -813,45 +893,87 @@ def get_stats_with_growth(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return stats
 
 
-def cleanup_orphaned_stats(conn: sqlite3.Connection) -> int:
-    """Remove stats for packages that are no longer being tracked.
+def get_milestone_high_water(conn: sqlite3.Connection, package_name: str) -> int | None:
+    """Return the highest download total a package has been checked at.
 
-    Returns the number of orphaned records deleted.
+    Milestone alerts fire on the way past this mark rather than on the way past
+    the previous snapshot, so a metric that dips and recovers cannot announce
+    the same milestone twice. Returns None before the first check.
     """
-    cursor = conn.execute("""
-        DELETE FROM package_stats
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
-    deleted = cursor.rowcount
-    conn.execute("""
-        DELETE FROM python_version_stats
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
-    conn.execute("""
-        DELETE FROM os_stats
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
-    conn.execute("""
-        DELETE FROM fetch_attempts
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
-    conn.execute("""
-        DELETE FROM daily_downloads
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
-    conn.execute("""
-        DELETE FROM github_stats_history
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
-    conn.execute("""
-        DELETE FROM package_tags
-        WHERE package_name NOT IN (SELECT package_name FROM packages)
-    """)
+    cursor = conn.execute(
+        "SELECT high_water FROM milestone_state WHERE package_name = ?",
+        (package_name,),
+    )
+    row = cursor.fetchone()
+    return int(row["high_water"]) if row is not None else None
+
+
+def set_milestone_high_water(
+    conn: sqlite3.Connection, package_name: str, value: int, commit: bool = True
+) -> None:
+    """Raise a package's milestone high-water mark, never lowering it."""
+    conn.execute(
+        """
+        INSERT INTO milestone_state (package_name, high_water, updated_date)
+        VALUES (?, ?, ?)
+        ON CONFLICT(package_name) DO UPDATE SET
+            high_water = MAX(high_water, excluded.high_water),
+            updated_date = excluded.updated_date
+        """,
+        (package_name, value, datetime.now().strftime("%Y-%m-%d")),
+    )
+    if commit:
+        conn.commit()
+
+
+def _run_deletions(
+    conn: sqlite3.Connection, deletions: list[tuple[str, str, tuple[Any, ...]]]
+) -> dict[str, int]:
+    """Run table deletions and report how many rows each one removed.
+
+    Returns a mapping of table name to deleted row count, plus a ``total``
+    entry. Counting every table matters because these operations span the whole
+    schema, and reporting only one table's count understates them badly once
+    the daily series dwarfs the snapshot table.
+    """
+    counts: dict[str, int] = {}
+    for table, where, params in deletions:
+        cursor = conn.execute(f"DELETE FROM {table} WHERE {where}", params)
+        counts[table] = cursor.rowcount
     conn.commit()
-    return deleted
+    counts["total"] = sum(counts.values())
+    return counts
 
 
-def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
+# Tables holding package-owned rows that `cleanup` purges once a package is no
+# longer tracked. `milestone_state` is included so that re-adding a package
+# starts its milestone history over rather than inheriting a stale high-water
+# mark.
+_PACKAGE_OWNED_TABLES = (
+    "package_stats",
+    "python_version_stats",
+    "os_stats",
+    "fetch_attempts",
+    "daily_downloads",
+    "github_stats_history",
+    "package_tags",
+    "milestone_state",
+)
+
+
+def cleanup_orphaned_stats(conn: sqlite3.Connection) -> dict[str, int]:
+    """Remove stored data for packages that are no longer being tracked.
+
+    Returns:
+        Rows deleted per table, plus a ``total`` entry summing them.
+    """
+    untracked = "package_name NOT IN (SELECT package_name FROM packages)"
+    return _run_deletions(
+        conn, [(table, untracked, ()) for table in _PACKAGE_OWNED_TABLES]
+    )
+
+
+def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> dict[str, int]:
     """Remove stats older than the specified number of days.
 
     Args:
@@ -859,63 +981,66 @@ def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> int:
         days: Delete stats older than this many days (default: 365).
 
     Returns:
-        Number of records deleted.
+        Rows deleted per table, plus a ``total`` entry summing them. The daily
+        series is usually the bulk of it, so the per-table split is what makes
+        the figure interpretable.
     """
-    cursor = conn.execute(
-        """
-        DELETE FROM package_stats
-        WHERE fetch_date < date('now', ?)
-    """,
-        (f"-{days} days",),
+    cutoff = (f"-{days} days",)
+    # The snapshot and environment tables date rows by fetch, the time series
+    # tables by the day the downloads happened.
+    return _run_deletions(
+        conn,
+        [
+            ("package_stats", "fetch_date < date('now', ?)", cutoff),
+            ("python_version_stats", "fetch_date < date('now', ?)", cutoff),
+            ("os_stats", "fetch_date < date('now', ?)", cutoff),
+            ("daily_downloads", "date < date('now', ?)", cutoff),
+            ("github_stats_history", "date < date('now', ?)", cutoff),
+        ],
     )
-    deleted = cursor.rowcount
-    conn.execute(
-        "DELETE FROM python_version_stats WHERE fetch_date < date('now', ?)",
-        (f"-{days} days",),
-    )
-    conn.execute(
-        "DELETE FROM os_stats WHERE fetch_date < date('now', ?)",
-        (f"-{days} days",),
-    )
-    conn.execute(
-        "DELETE FROM daily_downloads WHERE date < date('now', ?)",
-        (f"-{days} days",),
-    )
-    conn.execute(
-        "DELETE FROM github_stats_history WHERE date < date('now', ?)",
-        (f"-{days} days",),
-    )
-    conn.commit()
-    return deleted
 
 
 def get_database_stats(conn: sqlite3.Connection) -> dict[str, Any]:
     """Get database statistics.
 
+    Counts and the date range span every table that stores collected history,
+    not just the snapshot table. Most of a mature database is the daily series
+    and the GitHub history, so reporting `package_stats` alone understates both
+    how much is stored and how far back it reaches.
+
     Returns:
-        Dict with package_count, record_count, first_fetch, and last_fetch.
+        Dict with package_count, the per-table snapshot_records / daily_records
+        / github_history_records counts, their sum as record_count, and the
+        first_fetch / last_fetch range across all three.
     """
-    # Get package count
     cursor = conn.execute("SELECT COUNT(*) as count FROM packages")
     package_count = cursor.fetchone()["count"]
 
-    # Get record count
-    cursor = conn.execute("SELECT COUNT(*) as count FROM package_stats")
-    record_count = cursor.fetchone()["count"]
+    def count(table: str) -> int:
+        row = conn.execute(f"SELECT COUNT(*) as count FROM {table}").fetchone()
+        return int(row["count"])
 
-    # Get date range
-    cursor = conn.execute(
-        "SELECT MIN(fetch_date) as first, MAX(fetch_date) as last FROM package_stats"
-    )
-    row = cursor.fetchone()
-    first_fetch = row["first"]
-    last_fetch = row["last"]
+    snapshot_records = count("package_stats")
+    daily_records = count("daily_downloads")
+    github_history_records = count("github_stats_history")
+
+    # Each table names its date column differently; union them for the range.
+    row = conn.execute("""
+        SELECT MIN(date) as first, MAX(date) as last FROM (
+            SELECT fetch_date AS date FROM package_stats
+            UNION ALL SELECT date FROM daily_downloads
+            UNION ALL SELECT date FROM github_stats_history
+        )
+    """).fetchone()
 
     return {
         "package_count": package_count,
-        "record_count": record_count,
-        "first_fetch": first_fetch,
-        "last_fetch": last_fetch,
+        "record_count": snapshot_records + daily_records + github_history_records,
+        "snapshot_records": snapshot_records,
+        "daily_records": daily_records,
+        "github_history_records": github_history_records,
+        "first_fetch": row["first"],
+        "last_fetch": row["last"],
     }
 
 

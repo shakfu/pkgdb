@@ -226,6 +226,9 @@ def cmd_show(args: argparse.Namespace) -> None:
         print(f"  Size:        {_format_size(db_info['db_size_bytes'])}")
         print(f"  Packages:    {db_info['package_count']}")
         print(f"  Records:     {db_info['record_count']:,}")
+        print(f"    Snapshots: {db_info['snapshot_records']:,}")
+        print(f"    Daily:     {db_info['daily_records']:,}")
+        print(f"    GitHub:    {db_info['github_history_records']:,}")
         if db_info["first_fetch"] and db_info["last_fetch"]:
             print(f"  Date range:  {db_info['first_fetch']} to {db_info['last_fetch']}")
         else:
@@ -843,7 +846,9 @@ def cmd_history(args: argparse.Namespace) -> None:
     output_file = getattr(args, "output", DEFAULT_REPORT_FILE)
     no_browser = getattr(args, "no_browser", False)
 
-    if not service.generate_project_report(args.package, output_file):
+    if not service.generate_project_report(
+        args.package, output_file, since=since, limit=args.limit
+    ):
         logger.warning("Could not generate history report for %s.", args.package)
         return
 
@@ -1050,6 +1055,19 @@ def cmd_releases(args: argparse.Namespace) -> None:
     print(tabulate(table_rows, headers=headers, tablefmt="simple"))
 
 
+def _deleted_by_table(counts: dict[str, int]) -> dict[str, int]:
+    """Drop the summary entry so only real tables remain, and skip empty ones."""
+    return {table: n for table, n in counts.items() if table != "total" and n > 0}
+
+
+def _format_deleted(counts: dict[str, int]) -> str:
+    """Render a per-table deletion breakdown for terminal output."""
+    by_table = _deleted_by_table(counts)
+    if not by_table:
+        return "no rows"
+    return ", ".join(f"{table}: {n:,}" for table, n in sorted(by_table.items()))
+
+
 def cmd_cleanup(args: argparse.Namespace) -> None:
     """Cleanup command: remove orphaned stats and optionally prune old data."""
     service = PackageStatsService(args.database)
@@ -1057,29 +1075,42 @@ def cmd_cleanup(args: argparse.Namespace) -> None:
     # Remove orphaned stats (stats for packages no longer tracked)
     orphaned, remaining = service.cleanup()
 
-    pruned = 0
+    pruned: dict[str, int] = {"total": 0}
     if hasattr(args, "days") and args.days:
         pruned = service.prune(args.days)
 
     if getattr(args, "json", False):
+        # Report the per-table breakdown alongside the total: these operations
+        # span the whole schema, and a lone number reads as if it described it.
         output: dict[str, Any] = {
-            "orphaned_removed": orphaned,
+            "orphaned_removed": orphaned["total"],
+            "orphaned_removed_by_table": _deleted_by_table(orphaned),
             "packages_remaining": remaining,
         }
         if hasattr(args, "days") and args.days:
-            output["pruned"] = pruned
+            output["pruned"] = pruned["total"]
+            output["pruned_by_table"] = _deleted_by_table(pruned)
             output["prune_days"] = args.days
         print(json.dumps(output, indent=2))
         return
 
-    if orphaned > 0:
-        logger.info("Removed %d orphaned stats records.", orphaned)
+    if orphaned["total"] > 0:
+        logger.info(
+            "Removed %d orphaned records (%s).",
+            orphaned["total"],
+            _format_deleted(orphaned),
+        )
     else:
         logger.info("No orphaned stats to remove.")
 
     if hasattr(args, "days") and args.days:
-        if pruned > 0:
-            logger.info("Pruned %d stats older than %d days.", pruned, args.days)
+        if pruned["total"] > 0:
+            logger.info(
+                "Pruned %d records older than %d days (%s).",
+                pruned["total"],
+                args.days,
+                _format_deleted(pruned),
+            )
         else:
             logger.info("No stats older than %d days to prune.", args.days)
 

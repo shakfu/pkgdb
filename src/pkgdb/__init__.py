@@ -5,7 +5,7 @@ Reads published packages from packages.json, fetches download statistics
 via pypistats, stores data in SQLite, and generates HTML reports.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 # Re-export public API from submodules
 from .api import (
@@ -61,6 +61,8 @@ from .db import (
     get_db_connection,
     get_github_releases,
     get_github_stats_history,
+    get_milestone_high_water,
+    set_milestone_high_water,
     get_latest_stats,
     get_package_history,
     get_package_tags,
@@ -72,6 +74,7 @@ from .db import (
     get_pypi_releases,
     get_stats_with_growth,
     init_db,
+    is_tracked,
     prune_old_stats,
     record_fetch_attempt,
     remove_package,
@@ -191,6 +194,8 @@ __all__ = [
     "get_db_connection",
     "get_github_releases",
     "get_github_stats_history",
+    "get_milestone_high_water",
+    "set_milestone_high_water",
     "get_latest_stats",
     "get_package_history",
     "get_package_tags",
@@ -202,6 +207,7 @@ __all__ = [
     "get_pypi_releases",
     "get_stats_with_growth",
     "init_db",
+    "is_tracked",
     "prune_old_stats",
     "record_fetch_attempt",
     "remove_package",
