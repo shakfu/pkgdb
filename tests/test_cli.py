@@ -78,7 +78,10 @@ class TestCLI:
     def test_main_add_command(self, temp_db, caplog):
         """add command should add a package to tracking."""
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "add", "requests"]):
-            main()
+            with patch(
+                "pkgdb.service.check_package_exists", return_value=(True, None)
+            ):
+                main()
 
         assert "Added" in caplog.text
         assert "requests" in caplog.text
@@ -96,7 +99,10 @@ class TestCLI:
         conn.close()
 
         with patch("sys.argv", ["pkgdb", "-d", temp_db, "add", "requests"]):
-            main()
+            with patch(
+                "pkgdb.service.check_package_exists", return_value=(True, None)
+            ):
+                main()
 
         assert "already" in caplog.text
 
@@ -451,6 +457,9 @@ class TestCLI:
             ('test-pkg', '2024-01-02', 20, 140, 600, 2000)
         """)
         conn.commit()
+        # Report only reads history for tracked packages; without this the
+        # stats lookup falls through to a live API call.
+        track(conn, "test-pkg")
         conn.close()
 
         with tempfile.NamedTemporaryFile(
@@ -465,13 +474,21 @@ class TestCLI:
         system_response = json.dumps({
             "data": [{"category": "Linux", "downloads": 4000}]
         })
+        recent_response = json.dumps({
+            "data": {"last_day": 20, "last_week": 140, "last_month": 600}
+        })
+        overall_response = json.dumps({
+            "data": [{"category": "without_mirrors", "downloads": 2000}]
+        })
 
         try:
             with patch("sys.argv", ["pkgdb", "-d", temp_db, "report", "test-pkg", "-o", output_path]):
                 with patch("webbrowser.open_new_tab"):
-                    with patch("pkgdb.api.pypistats.python_minor", return_value=python_response):
-                        with patch("pkgdb.api.pypistats.system", return_value=system_response):
-                            main()
+                    with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
+                        with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
+                            with patch("pkgdb.api.pypistats.python_minor", return_value=python_response):
+                                with patch("pkgdb.api.pypistats.system", return_value=system_response):
+                                    main()
 
             assert Path(output_path).exists()
             content = Path(output_path).read_text()

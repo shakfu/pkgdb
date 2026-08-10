@@ -331,7 +331,10 @@ class TestApiEndpoints:
         assert data["os_stats"] == []
 
     def test_api_releases(self, server_url):
-        resp = urlopen(f"{server_url}/api/releases/alpha-pkg")
+        # alpha-pkg has no cached releases, so patch the live lookups
+        with patch("pkgdb.service.fetch_pypi_releases", return_value=None), \
+             patch("pkgdb.service.extract_github_url", return_value=None):
+            resp = urlopen(f"{server_url}/api/releases/alpha-pkg")
         assert resp.status == 200
         data = json.loads(resp.read())
         assert "pypi" in data

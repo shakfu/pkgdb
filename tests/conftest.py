@@ -1,12 +1,81 @@
 """Shared fixtures for pkgdb tests."""
 
+import ipaddress
 import json
+import socket
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from pkgdb import get_db_connection, init_db
+
+# Hostnames that resolve to this machine and so never leave it.
+_LOCAL_HOSTS = frozenset({"localhost", "localhost.localdomain", ""})
+
+
+def _is_local(address) -> bool:
+    """Return True if `address` is loopback, unspecified, or a non-IP family.
+
+    Non-tuple addresses belong to families like AF_UNIX that cannot reach the
+    network, so they are always allowed.
+    """
+    if not isinstance(address, (tuple, list)) or not address:
+        return True
+    host = address[0]
+    if not isinstance(host, str):
+        return True
+    if host.lower() in _LOCAL_HOSTS:
+        return True
+    try:
+        ip = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    return ip.is_loopback or ip.is_unspecified
+
+
+@pytest.fixture(autouse=True)
+def block_network(request, monkeypatch):
+    """Fail any test that opens a connection beyond this machine.
+
+    Live API calls make tests non-deterministic: they pass locally and then
+    fail in CI when the upstream service rate-limits the runner. Blocking them
+    turns a missing mock into an immediate, obvious error instead.
+
+    Tests marked `integration` are exempt, since making real API calls is
+    their whole purpose. Loopback is always allowed so the HTTP server tests
+    keep working.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    real_create_connection = socket.create_connection
+
+    def guard(address):
+        if not _is_local(address):
+            raise RuntimeError(
+                f"Blocked network connection to {address!r} in "
+                f"{request.node.nodeid}. Mock the API call, or mark the test "
+                f"'integration' if it is meant to hit the real service."
+            )
+
+    def connect(self, address):
+        guard(address)
+        return real_connect(self, address)
+
+    def connect_ex(self, address):
+        guard(address)
+        return real_connect_ex(self, address)
+
+    def create_connection(address, *args, **kwargs):
+        guard(address)
+        return real_create_connection(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", connect_ex)
+    monkeypatch.setattr(socket, "create_connection", create_connection)
 
 
 def track(conn, *package_names, added_date="2024-01-01"):
