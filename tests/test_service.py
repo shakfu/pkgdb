@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from datetime import datetime, timedelta
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,6 +28,7 @@ from pkgdb import (
     RepoStats,
     RepoResult,
 )
+from pkgdb.utils import utcnow
 from pkgdb.github import store_cached_repo_data
 
 
@@ -43,9 +45,9 @@ def _make_repo_stats(**overrides):
         watchers=50,
         language="Python",
         license="MIT",
-        created_at=datetime.now() - timedelta(days=365),
-        updated_at=datetime.now(),
-        pushed_at=datetime.now() - timedelta(days=1),
+        created_at=utcnow() - timedelta(days=365),
+        updated_at=utcnow(),
+        pushed_at=utcnow() - timedelta(days=1),
         archived=False,
         fork=False,
         default_branch="main",

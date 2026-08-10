@@ -2,8 +2,10 @@
 
 import ipaddress
 import json
+import os
 import socket
 import tempfile
+import time
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -144,6 +146,25 @@ def track(conn, *package_names, added_date="2024-01-01"):
             (name, added_date),
         )
     conn.commit()
+
+
+@pytest.fixture
+def in_timezone(request):
+    """Run the test as if the machine were in the parametrized `tz`.
+
+    Restores the original zone itself rather than through monkeypatch, since
+    the process-wide zone only takes effect once `time.tzset()` reloads it,
+    and that has to happen after the environment variable is put back.
+    """
+    original = os.environ.get("TZ")
+    os.environ["TZ"] = request.getfixturevalue("tz")
+    time.tzset()
+    yield
+    if original is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = original
+    time.tzset()
 
 
 @pytest.fixture

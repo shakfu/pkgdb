@@ -2,7 +2,9 @@
 
 import json
 import os
+import time
 from datetime import datetime, timedelta
+
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -17,6 +19,7 @@ from pkgdb import (
     extract_github_url,
     get_github_token,
 )
+from pkgdb.utils import utcnow
 from pkgdb.github import (
     _parse_repo_data,
     _parse_datetime,
@@ -37,9 +40,9 @@ def _make_repo_stats(**overrides):
         watchers=50,
         language="Python",
         license="MIT",
-        created_at=datetime.now() - timedelta(days=365),
-        updated_at=datetime.now(),
-        pushed_at=datetime.now() - timedelta(days=1),
+        created_at=utcnow() - timedelta(days=365),
+        updated_at=utcnow(),
+        pushed_at=utcnow() - timedelta(days=1),
         archived=False,
         fork=False,
         default_branch="main",
@@ -115,8 +118,22 @@ class TestRepoStats:
     """Tests for RepoStats dataclass."""
 
     def test_days_since_push(self):
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = utcnow() - timedelta(days=1)
         stats = _make_repo_stats(pushed_at=yesterday)
+        assert stats.days_since_push == 1
+
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"), reason="TZ manipulation requires a POSIX platform"
+    )
+    @pytest.mark.parametrize("tz", ["Etc/GMT-3", "Etc/GMT+5", "UTC"])
+    def test_days_since_push_ignores_local_timezone(self, tz, in_timezone):
+        """`pushed_at` is UTC from the API, so the age must be measured in UTC.
+
+        Measuring it against a local clock shifted the answer by the machine's
+        UTC offset, which flips the reported age by a whole day either side of
+        the boundary and with it `activity_status`.
+        """
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=1, hours=6))
         assert stats.days_since_push == 1
 
     def test_days_since_push_none(self):
@@ -124,27 +141,27 @@ class TestRepoStats:
         assert stats.days_since_push is None
 
     def test_is_active_recent_push(self):
-        stats = _make_repo_stats(pushed_at=datetime.now() - timedelta(days=10))
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=10))
         assert stats.is_active is True
 
     def test_is_active_old_push(self):
-        stats = _make_repo_stats(pushed_at=datetime.now() - timedelta(days=400))
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=400))
         assert stats.is_active is False
 
     def test_activity_status_very_active(self):
-        stats = _make_repo_stats(pushed_at=datetime.now() - timedelta(days=5))
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=5))
         assert stats.activity_status == "very active"
 
     def test_activity_status_active(self):
-        stats = _make_repo_stats(pushed_at=datetime.now() - timedelta(days=60))
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=60))
         assert stats.activity_status == "active"
 
     def test_activity_status_maintained(self):
-        stats = _make_repo_stats(pushed_at=datetime.now() - timedelta(days=200))
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=200))
         assert stats.activity_status == "maintained"
 
     def test_activity_status_stale(self):
-        stats = _make_repo_stats(pushed_at=datetime.now() - timedelta(days=400))
+        stats = _make_repo_stats(pushed_at=utcnow() - timedelta(days=400))
         assert stats.activity_status == "stale"
 
     def test_activity_status_archived(self):

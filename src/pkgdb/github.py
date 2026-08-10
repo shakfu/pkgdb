@@ -12,6 +12,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from .utils import utcnow
+
 logger = logging.getLogger("pkgdb")
 
 GITHUB_API = "https://api.github.com"
@@ -59,7 +61,8 @@ class RepoStats:
     @property
     def days_since_push(self) -> int | None:
         if self.pushed_at:
-            return (datetime.now() - self.pushed_at).days
+            # pushed_at comes from the API as UTC with the tzinfo stripped.
+            return (utcnow() - self.pushed_at).days
         return None
 
     @property
@@ -197,7 +200,8 @@ def store_cached_repo_data(
     """Store GitHub API response in cache."""
     _ensure_cache_table(conn)
     cache_key = _get_cache_key(owner, repo)
-    expires_at = datetime.now() + timedelta(hours=ttl_hours)
+    # UTC: compared against SQLite's datetime('now') in get_cached_repo_data.
+    expires_at = utcnow() + timedelta(hours=ttl_hours)
     conn.execute(
         """INSERT OR REPLACE INTO github_cache (repo_key, data, fetched_at, expires_at)
            VALUES (?, ?, datetime('now'), ?)""",

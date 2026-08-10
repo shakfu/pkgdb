@@ -30,7 +30,9 @@ from pkgdb import (
     RepoResult,
     main,
 )
+from pkgdb.utils import utcnow
 from datetime import datetime, timedelta
+
 
 
 def _make_repo_stats(**overrides):
@@ -46,9 +48,9 @@ def _make_repo_stats(**overrides):
         watchers=50,
         language="Python",
         license="MIT",
-        created_at=datetime.now() - timedelta(days=365),
-        updated_at=datetime.now(),
-        pushed_at=datetime.now() - timedelta(days=1),
+        created_at=utcnow() - timedelta(days=365),
+        updated_at=utcnow(),
+        pushed_at=utcnow() - timedelta(days=1),
         archived=False,
         fork=False,
         default_branch="main",

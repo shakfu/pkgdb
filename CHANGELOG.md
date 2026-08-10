@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2]
+
+### Fixed
+
+- Time windows measured against the database clock are now the length they claim
+  - Timestamps were written with `datetime.now()` (local) and then compared
+    against SQLite's `datetime('now')` (always UTC), so every such window ran
+    for 24 hours plus the machine's UTC offset. East of UTC packages stayed
+    throttled well past a day -- `update` reported "Skipped N packages (already
+    fetched in last 24 hours)" more than 24 hours after the last fetch -- while
+    west of UTC the window expired early, refetching into the PyPI rate limit
+    the cooldown exists to avoid
+  - Affected the per-package fetch cooldown (`record_fetch_attempt`), the
+    GitHub API response cache TTL (`store_cached_repo_data`), and
+    `RepoStats.days_since_push`, which measured a UTC `pushed_at` against a
+    local clock and so could report an age off by a day, changing
+    `activity_status`. The `release_cache` TTL was already UTC on both sides
+  - `get_next_update_seconds()` computed its countdown entirely in local time.
+    That was internally consistent but disagreed with the query gating the
+    fetch, so `show` could report an update as due while `update` skipped it
+  - New `utcnow()` in `pkgdb.utils` is what these paths now write
+  - Attempt rows written by an earlier version keep their local timestamps and
+    are read as UTC, so a machine east of UTC may see one final cooldown up to
+    its offset too long; the next successful fetch rewrites them
+- `prune_old_stats()` no longer prunes a day early or a day late
+  - The dated tables are stamped on the local calendar, but the cutoff was
+    `date('now', '-N days')`, which is the UTC calendar. For the part of each
+    day when the two disagree, `cleanup --prune` deleted a day more or a day
+    less of history than asked. The cutoff is now computed on the same calendar
+    the rows are dated on
+
 ## [0.2.1]
 
 ### Fixed

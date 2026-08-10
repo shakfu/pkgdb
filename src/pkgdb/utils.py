@@ -2,7 +2,7 @@
 
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # -----------------------------------------------------------------------------
@@ -31,6 +31,26 @@ SPARKLINE_WIDTH = 7
 
 # Characters used to represent values in sparklines (low to high)
 SPARKLINE_CHARS = " _.,:-=+*#"
+
+
+# -----------------------------------------------------------------------------
+# Time
+# -----------------------------------------------------------------------------
+
+
+def utcnow() -> datetime:
+    """Return the current UTC time as a naive datetime.
+
+    Timestamps that are compared against SQLite's `datetime('now')` must be
+    written in UTC, since that function is UTC regardless of the machine's
+    timezone. Storing `datetime.now()` instead made every such window last
+    24 hours plus the local UTC offset (and expire early west of UTC).
+
+    The result is naive so that stored ISO strings sort and compare directly
+    against SQLite's own output, and so that arithmetic against other naive
+    UTC values (such as GitHub API timestamps) stays well defined.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def validate_output_path(

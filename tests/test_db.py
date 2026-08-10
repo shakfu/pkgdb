@@ -1,12 +1,15 @@
 """Tests for database operations, package management, stats storage, and related DB functionality."""
 
 import json
+import os
 import sqlite3
 import tempfile
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import mock_pypistats
+from conftest import mock_pypistats, track
 
 from pkgdb import (
     get_db_connection,
@@ -724,6 +727,94 @@ class TestNextUpdateTime:
         assert seconds is None
         conn.close()
 
+
+# Zones either side of UTC, chosen so a timestamp written in local time lands
+# in the future (east) or the past (west) of SQLite's UTC clock. The POSIX
+# sign convention in these names is inverted: Etc/GMT-3 is UTC+3.
+@pytest.mark.skipif(
+    not hasattr(time, "tzset"), reason="TZ manipulation requires a POSIX platform"
+)
+@pytest.mark.parametrize("tz", ["Etc/GMT-3", "Etc/GMT+5", "UTC"])
+class TestFetchCooldownTimezones:
+    """The 24-hour fetch cooldown must be 24 hours in every timezone.
+
+    Attempts were once stamped with `datetime.now()` and then compared against
+    SQLite's `datetime('now')`, which is UTC. That made the cooldown last
+    24 hours plus the machine's UTC offset, so packages east of UTC stayed
+    throttled well past a day, while packages west of it refetched early and
+    walked into the PyPI rate limit the cooldown exists to avoid.
+    """
+
+    def test_attempt_is_stamped_in_utc(self, temp_db, tz, in_timezone):
+        """A recorded attempt must agree with SQLite's own clock."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        record_fetch_attempt(conn, "pkg-a", success=True)
+
+        row = conn.execute(
+            "SELECT attempt_time, datetime('now') AS sqlite_now FROM fetch_attempts"
+        ).fetchone()
+        stored = datetime.fromisoformat(row["attempt_time"])
+        sqlite_now = datetime.fromisoformat(row["sqlite_now"])
+
+        assert abs((stored - sqlite_now).total_seconds()) < 60
+        conn.close()
+
+    def test_package_is_eligible_after_25_hours(self, temp_db, tz, in_timezone):
+        """An attempt older than the window must release the package."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        _record_attempt_at(conn, "pkg-a", "-25 hours")
+
+        assert get_packages_needing_update(conn) == ["pkg-a"]
+        conn.close()
+
+    def test_package_is_throttled_before_24_hours(self, temp_db, tz, in_timezone):
+        """An attempt inside the window must keep the package throttled."""
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        _record_attempt_at(conn, "pkg-a", "-23 hours")
+
+        assert get_packages_needing_update(conn) == []
+        conn.close()
+
+    def test_next_update_seconds_matches_the_gate(self, temp_db, tz, in_timezone):
+        """The reported countdown must agree with when the gate actually opens.
+
+        Both sides read the same stored timestamp, so a countdown computed
+        against a different clock than the query used would report a package
+        as due while `update` still skipped it.
+        """
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "pkg-a")
+        _record_attempt_at(conn, "pkg-a", "-23 hours")
+
+        seconds = get_next_update_seconds(conn)
+        assert seconds is not None
+        # One hour left on a 23-hour-old attempt, allowing for clock skew.
+        assert 3540 < seconds <= 3600
+        conn.close()
+
+
+def _record_attempt_at(conn, package_name: str, modifier: str) -> None:
+    """Seed a successful attempt at a UTC offset from now, e.g. '-25 hours'.
+
+    Written through SQLite so the row matches the storage contract that
+    `record_fetch_attempt` follows: attempt times are UTC.
+    """
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO fetch_attempts (package_name, attempt_time, success)
+        VALUES (?, datetime('now', ?), 1)
+        """,
+        (package_name, modifier),
+    )
+    conn.commit()
+
     def test_get_next_update_seconds_only_failed(self, temp_db):
         """get_next_update_seconds should return None when only failed attempts exist."""
         conn = get_db_connection(temp_db)
@@ -1129,6 +1220,31 @@ class TestGitHubCache:
 
         cached = get_cached_repo_data(conn, "owner", "repo")
         assert cached is not None
+        conn.close()
+
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"), reason="TZ manipulation requires a POSIX platform"
+    )
+    @pytest.mark.parametrize("tz", ["Etc/GMT-3", "Etc/GMT+5", "UTC"])
+    def test_ttl_is_24_hours_in_any_timezone(self, temp_db, tz, in_timezone):
+        """Expiry is read with SQLite's UTC clock, so it must be written in UTC.
+
+        A local-time expiry stretched the 24-hour TTL by the machine's UTC
+        offset east of UTC, and cut it short west of UTC.
+        """
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        store_cached_repo_data(conn, "owner", "repo", _make_github_api_response())
+
+        row = conn.execute(
+            """SELECT expires_at, datetime('now', '+24 hours') AS expected
+               FROM github_cache"""
+        ).fetchone()
+        expires_at = datetime.fromisoformat(row["expires_at"])
+        expected = datetime.fromisoformat(row["expected"])
+
+        assert abs((expires_at - expected).total_seconds()) < 60
         conn.close()
 
     def test_clear_expired_cache(self, temp_db):
@@ -1625,3 +1741,31 @@ class TestMaintenanceReporting:
         assert deleted["package_stats"] == 1
         assert deleted["daily_downloads"] == 4
         assert deleted["total"] == 5
+
+    # Rows are dated on the local calendar, so the cutoff has to be too. These
+    # two zones sit far enough either side of UTC that at any given instant at
+    # least one of them is on a different calendar date than UTC, which is what
+    # makes a UTC cutoff fail here whatever time the suite runs.
+    @pytest.mark.skipif(
+        not hasattr(time, "tzset"), reason="TZ manipulation requires a POSIX platform"
+    )
+    @pytest.mark.parametrize("tz", ["Etc/GMT-14", "Etc/GMT+11"])
+    def test_prune_boundary_uses_the_local_calendar(self, db_conn, tz, in_timezone):
+        """A row exactly `days` old survives; the day before it does not."""
+        today = datetime.now().date()
+        boundary = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        day_before = (today - timedelta(days=31)).strftime("%Y-%m-%d")
+        track(db_conn, "pkg-a")
+        db_conn.executemany(
+            "INSERT INTO package_stats (package_name, fetch_date, total) VALUES (?, ?, ?)",
+            [("pkg-a", boundary, 100), ("pkg-a", day_before, 90)],
+        )
+        db_conn.commit()
+
+        deleted = prune_old_stats(db_conn, days=30)
+
+        assert deleted["package_stats"] == 1
+        remaining = db_conn.execute(
+            "SELECT fetch_date FROM package_stats ORDER BY fetch_date"
+        ).fetchall()
+        assert [r["fetch_date"] for r in remaining] == [boundary]

@@ -14,7 +14,7 @@ from .types import (
     PackageStats,
     PyPIRelease,
 )
-from .utils import calculate_growth, daily_window_sums
+from .utils import calculate_growth, daily_window_sums, utcnow
 
 
 def get_config_dir() -> Path:
@@ -352,7 +352,8 @@ def record_fetch_attempt(
         success: Whether the fetch was successful.
         commit: If True, commit the transaction.
     """
-    attempt_time = datetime.now().isoformat()
+    # UTC: compared against SQLite's datetime('now') in get_packages_needing_update.
+    attempt_time = utcnow().isoformat()
     conn.execute(
         """
         INSERT OR REPLACE INTO fetch_attempts (package_name, attempt_time, success)
@@ -416,7 +417,7 @@ def get_next_update_seconds(conn: sqlite3.Connection, hours: int = 24) -> float 
 
     earliest = datetime.fromisoformat(row["earliest"])
     expires_at = earliest + timedelta(hours=hours)
-    remaining = (expires_at - datetime.now()).total_seconds()
+    remaining = (expires_at - utcnow()).total_seconds()
     return max(0.0, remaining)
 
 
@@ -985,17 +986,22 @@ def prune_old_stats(conn: sqlite3.Connection, days: int = 365) -> dict[str, int]
         series is usually the bulk of it, so the per-table split is what makes
         the figure interpretable.
     """
-    cutoff = (f"-{days} days",)
+    # Rows are dated on the local calendar -- `fetch_date` is stamped with the
+    # local date, and the daily series is dated by day rather than by instant --
+    # so the cutoff is computed on that same calendar. SQLite's `date('now')` is
+    # UTC, which puts the boundary a day out for the part of each day when the
+    # two calendars disagree, pruning a day early or a day late.
+    cutoff = ((datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d"),)
     # The snapshot and environment tables date rows by fetch, the time series
     # tables by the day the downloads happened.
     return _run_deletions(
         conn,
         [
-            ("package_stats", "fetch_date < date('now', ?)", cutoff),
-            ("python_version_stats", "fetch_date < date('now', ?)", cutoff),
-            ("os_stats", "fetch_date < date('now', ?)", cutoff),
-            ("daily_downloads", "date < date('now', ?)", cutoff),
-            ("github_stats_history", "date < date('now', ?)", cutoff),
+            ("package_stats", "fetch_date < ?", cutoff),
+            ("python_version_stats", "fetch_date < ?", cutoff),
+            ("os_stats", "fetch_date < ?", cutoff),
+            ("daily_downloads", "date < ?", cutoff),
+            ("github_stats_history", "date < ?", cutoff),
         ],
     )
 
