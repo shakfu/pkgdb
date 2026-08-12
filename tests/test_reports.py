@@ -584,6 +584,161 @@ class TestGithubInReport:
         assert html.count("Stars") == 1  # only in header
         Path(output).unlink(missing_ok=True)
 
+    def test_report_includes_open_issues(self, temp_db):
+        """The GitHub columns should carry each repo's open issue count."""
+        from pkgdb.reports import generate_html_report
+
+        stats = [{
+            "package_name": "test-pkg",
+            "total": 50000,
+            "last_month": 3000,
+            "last_week": 700,
+            "last_day": 100,
+        }]
+        gh_stats = {
+            "test-pkg": _make_repo_stats(
+                full_name="owner/test-pkg",
+                open_issues=25,
+                open_issues_excl_prs=17,
+            ),
+        }
+        output = os.path.join(os.path.dirname(temp_db), "test_report.html")
+        generate_html_report(stats, output, github_stats=gh_stats)
+
+        with open(output) as f:
+            html = f.read()
+
+        assert "Open Issues" in html
+        # The issues-only count, not GitHub's PR-inclusive open_issues.
+        assert (
+            '<a href="https://github.com/owner/test-pkg/issues">17</a>' in html
+        )
+        assert ">25<" not in html
+        Path(output).unlink(missing_ok=True)
+
+    def test_report_open_issues_unknown_shows_dash(self, temp_db):
+        """Without an issues-only count the cell is unknown, not zero."""
+        from pkgdb.reports import generate_html_report
+
+        stats = [{
+            "package_name": "test-pkg",
+            "total": 50000,
+            "last_month": 3000,
+            "last_week": 700,
+            "last_day": 100,
+        }]
+        gh_stats = {
+            "test-pkg": _make_repo_stats(
+                full_name="owner/test-pkg",
+                open_issues=25,
+                open_issues_excl_prs=None,
+            ),
+        }
+        output = os.path.join(os.path.dirname(temp_db), "test_report.html")
+        generate_html_report(stats, output, github_stats=gh_stats)
+
+        with open(output) as f:
+            html = f.read()
+
+        assert "/issues" not in html
+        assert ">25<" not in html
+        assert html.count('<td class="number">-</td>') == 1
+        Path(output).unlink(missing_ok=True)
+
+    def test_report_open_issues_missing_package_shows_dash(self, temp_db):
+        """A package without repo data gets a dash in the issues column."""
+        from pkgdb.reports import generate_html_report
+
+        stats = [
+            {
+                "package_name": "has-gh",
+                "total": 50000,
+                "last_month": 3000,
+                "last_week": 700,
+                "last_day": 100,
+            },
+            {
+                "package_name": "no-gh",
+                "total": 1000,
+                "last_month": 100,
+                "last_week": 20,
+                "last_day": 5,
+            },
+        ]
+        gh_stats = {
+            "has-gh": _make_repo_stats(
+                full_name="owner/has-gh", open_issues_excl_prs=3
+            ),
+        }
+        output = os.path.join(os.path.dirname(temp_db), "test_report.html")
+        generate_html_report(stats, output, github_stats=gh_stats)
+
+        with open(output) as f:
+            html = f.read()
+
+        # The row without repo data emits six dash cells; stars, forks and
+        # issues are the numeric ones.
+        assert html.count("Open Issues") == 1
+        assert html.count('<td class="number">-</td>') == 3
+        Path(output).unlink(missing_ok=True)
+
+    def test_package_name_links_to_git_repo(self, temp_db):
+        """The project name should hyperlink to its git repo when known."""
+        from pkgdb.reports import generate_html_report
+
+        stats = [{
+            "package_name": "test-pkg",
+            "total": 50000,
+            "last_month": 3000,
+            "last_week": 700,
+            "last_day": 100,
+        }]
+        gh_stats = {
+            "test-pkg": _make_repo_stats(full_name="owner/test-pkg"),
+        }
+        output = os.path.join(os.path.dirname(temp_db), "test_report.html")
+        generate_html_report(stats, output, github_stats=gh_stats)
+
+        with open(output) as f:
+            html = f.read()
+
+        assert '<a href="https://github.com/owner/test-pkg">test-pkg</a>' in html
+        assert 'href="https://pypi.org/project/test-pkg/"' not in html
+        Path(output).unlink(missing_ok=True)
+
+    def test_package_name_falls_back_to_pypi_link(self, temp_db):
+        """Packages without repo data keep their PyPI link on the name."""
+        from pkgdb.reports import generate_html_report
+
+        stats = [
+            {
+                "package_name": "has-gh",
+                "total": 50000,
+                "last_month": 3000,
+                "last_week": 700,
+                "last_day": 100,
+            },
+            {
+                "package_name": "no-gh",
+                "total": 1000,
+                "last_month": 100,
+                "last_week": 20,
+                "last_day": 5,
+            },
+        ]
+        gh_stats = {
+            "has-gh": _make_repo_stats(full_name="owner/has-gh"),
+        }
+        output = os.path.join(os.path.dirname(temp_db), "test_report.html")
+        generate_html_report(stats, output, github_stats=gh_stats)
+
+        with open(output) as f:
+            html = f.read()
+
+        assert '<a href="https://github.com/owner/has-gh">has-gh</a>' in html
+        assert '<a href="https://pypi.org/project/no-gh/">no-gh</a>' in html
+        Path(output).unlink(missing_ok=True)
+
 
 class TestProjectReport:
     """Tests for project report generation."""

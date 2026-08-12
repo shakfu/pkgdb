@@ -52,6 +52,21 @@ def get_db(db_path: str) -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, decl: str
+) -> None:
+    """Add a column to an existing table if it is not already present.
+
+    SQLite has no ``ADD COLUMN IF NOT EXISTS``, and ``init_db()`` runs on every
+    connection, so the column list is checked first. Only additive migrations
+    belong here: the new column must be nullable or carry a default.
+    """
+    # Positional access: init_db may run on a connection with no row factory.
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Initialize the database schema."""
     conn.execute("""
@@ -183,6 +198,7 @@ def init_db(conn: sqlite3.Connection) -> None:
             stars INTEGER NOT NULL,
             forks INTEGER NOT NULL,
             open_issues INTEGER NOT NULL,
+            open_issues_excl_prs INTEGER,
             watchers INTEGER NOT NULL,
             UNIQUE(package_name, date)
         )
@@ -191,6 +207,12 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_github_stats_history_package
         ON github_stats_history(package_name, date)
     """)
+    # Databases created before the issues-only count lack the column. It is
+    # nullable because the count comes from a separately rate-limited API that
+    # may not answer; rows written before it existed are NULL for good.
+    _add_column_if_missing(
+        conn, "github_stats_history", "open_issues_excl_prs", "INTEGER"
+    )
     conn.execute("""
         CREATE TABLE IF NOT EXISTS package_tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1204,6 +1226,7 @@ def store_github_stats_snapshot(
     forks: int,
     open_issues: int,
     watchers: int,
+    open_issues_excl_prs: int | None = None,
     commit: bool = True,
 ) -> None:
     """Record a daily snapshot of a package's GitHub repo metrics.
@@ -1211,21 +1234,36 @@ def store_github_stats_snapshot(
     Upserts on ``(package_name, date)`` so repeated fetches on the same day
     refresh the day's values rather than duplicating. Unlike download data,
     GitHub gives no history, so this series accumulates going forward.
+
+    ``open_issues`` is GitHub's ``open_issues_count``, which counts open pull
+    requests as issues; ``open_issues_excl_prs`` is the issues-only figure and
+    is None when it could not be fetched.
     """
     date = datetime.now().strftime("%Y-%m-%d")
     conn.execute(
         """
         INSERT INTO github_stats_history
-            (package_name, repo_key, date, stars, forks, open_issues, watchers)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (package_name, repo_key, date, stars, forks, open_issues,
+             open_issues_excl_prs, watchers)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(package_name, date) DO UPDATE SET
             repo_key = excluded.repo_key,
             stars = excluded.stars,
             forks = excluded.forks,
             open_issues = excluded.open_issues,
+            open_issues_excl_prs = excluded.open_issues_excl_prs,
             watchers = excluded.watchers
         """,
-        (package_name, repo_key, date, stars, forks, open_issues, watchers),
+        (
+            package_name,
+            repo_key,
+            date,
+            stars,
+            forks,
+            open_issues,
+            open_issues_excl_prs,
+            watchers,
+        ),
     )
     if commit:
         conn.commit()
@@ -1242,10 +1280,12 @@ def get_github_stats_history(
         since: Only include rows on or after this ``YYYY-MM-DD`` date.
 
     Returns:
-        List of ``{date, stars, forks, open_issues, watchers}`` dicts.
+        List of ``{date, stars, forks, open_issues, open_issues_excl_prs,
+        watchers}`` dicts. ``open_issues_excl_prs`` is None for rows recorded
+        before the issues-only count existed.
     """
     query = [
-        "SELECT date, stars, forks, open_issues, watchers",
+        "SELECT date, stars, forks, open_issues, open_issues_excl_prs, watchers",
         "FROM github_stats_history WHERE package_name = ?",
     ]
     params: list[Any] = [package_name]

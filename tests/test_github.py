@@ -405,3 +405,132 @@ class TestFetchPackageGithubStats:
         assert result.success is False
         assert "No GitHub repository" in result.error
         conn.close()
+
+
+class TestOpenIssueCount:
+    """Tests for the issues-only count from the search API."""
+
+    def _mock_search(self, payload, captured_urls=None):
+        def mock_urlopen(req, **kwargs):
+            if captured_urls is not None:
+                captured_urls.append(req.full_url)
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps(payload).encode()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        return mock_urlopen
+
+    def test_counts_issues_excluding_pull_requests(self, temp_db):
+        from pkgdb.github import fetch_open_issue_count
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        urls = []
+
+        with patch(
+            "pkgdb.github.urlopen",
+            side_effect=self._mock_search({"total_count": 12}, urls),
+        ):
+            count = fetch_open_issue_count("owner", "repo", conn=conn)
+
+        assert count == 12
+        assert "is:issue" in urls[0] and "is:open" in urls[0]
+        assert "repo:owner/repo" in urls[0]
+        conn.close()
+
+    def test_second_call_is_served_from_cache(self, temp_db):
+        from pkgdb.github import fetch_open_issue_count
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        urls = []
+        mock = self._mock_search({"total_count": 4}, urls)
+
+        with patch("pkgdb.github.urlopen", side_effect=mock):
+            assert fetch_open_issue_count("owner", "repo", conn=conn) == 4
+            assert fetch_open_issue_count("owner", "repo", conn=conn) == 4
+
+        assert len(urls) == 1
+        conn.close()
+
+    def test_zero_is_cached_and_not_confused_with_unknown(self, temp_db):
+        from pkgdb.github import fetch_open_issue_count
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        urls = []
+
+        with patch(
+            "pkgdb.github.urlopen",
+            side_effect=self._mock_search({"total_count": 0}, urls),
+        ):
+            assert fetch_open_issue_count("owner", "repo", conn=conn) == 0
+            assert fetch_open_issue_count("owner", "repo", conn=conn) == 0
+
+        assert len(urls) == 1
+        conn.close()
+
+    def test_network_error_returns_none(self, temp_db):
+        from urllib.error import URLError
+
+        from pkgdb.github import fetch_open_issue_count
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+
+        with patch("pkgdb.github.urlopen", side_effect=URLError("fail")):
+            assert fetch_open_issue_count("owner", "repo", conn=conn) is None
+        conn.close()
+
+    def test_rate_limited_search_does_not_fail_the_repo_fetch(self, temp_db):
+        """A 403 on search leaves the count unknown, not the whole fetch."""
+        from urllib.error import HTTPError
+
+        from pkgdb.github import fetch_repo_stats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        api_data = _make_github_api_response()
+
+        def mock_urlopen(req, **kwargs):
+            if "/search/" in req.full_url:
+                raise HTTPError(req.full_url, 403, "rate limited", {}, None)
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = json.dumps(api_data).encode()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            return mock_resp
+
+        with patch("pkgdb.github.urlopen", side_effect=mock_urlopen):
+            with patch("pkgdb.github.time.sleep"):
+                stats = fetch_repo_stats("testowner", "testrepo", conn=conn)
+
+        assert stats.stars == 42
+        assert stats.open_issues == 3  # GitHub's PR-inclusive figure
+        assert stats.open_issues_excl_prs is None
+        conn.close()
+
+    def test_cached_repo_still_gets_an_issue_count(self, temp_db):
+        """A warm repo cache must not skip the separate issues lookup."""
+        from pkgdb.github import fetch_repo_stats, store_cached_repo_data
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        store_cached_repo_data(
+            conn, "testowner", "testrepo", _make_github_api_response()
+        )
+        urls = []
+
+        with patch(
+            "pkgdb.github.urlopen",
+            side_effect=self._mock_search({"total_count": 8}, urls),
+        ):
+            stats = fetch_repo_stats("testowner", "testrepo", conn=conn)
+
+        assert stats.open_issues_excl_prs == 8
+        # Only the search call went out; the repo body came from the cache.
+        assert len(urls) == 1
+        assert "/search/" in urls[0]
+        conn.close()

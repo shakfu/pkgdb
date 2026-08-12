@@ -1079,6 +1079,7 @@ class PackageStatsService:
                         s.forks,
                         s.open_issues,
                         s.watchers,
+                        open_issues_excl_prs=s.open_issues_excl_prs,
                         commit=False,
                     )
             conn.commit()

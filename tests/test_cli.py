@@ -1479,6 +1479,86 @@ class TestJSONOutput:
         assert data[0]["forks"] == 5
         assert data[0]["language"] == "Python"
 
+    def test_github_json_reports_issues_excluding_prs(self, temp_db, capsys):
+        """open_issues keeps its GitHub meaning; the issues-only count is extra."""
+        from pkgdb.github import RepoResult, RepoStats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "my-pkg")
+        conn.close()
+
+        mock_stats = RepoStats(
+            owner="owner", name="my-pkg", full_name="owner/my-pkg",
+            description="A test package", stars=42, forks=5,
+            open_issues=11, watchers=42, language="Python",
+            license="MIT", created_at=None, updated_at=None,
+            pushed_at=None, archived=False, fork=False,
+            default_branch="main", topics=[], open_issues_excl_prs=4,
+        )
+        mock_result = RepoResult(
+            package_name="my-pkg", repo_url="https://github.com/owner/my-pkg",
+            stats=mock_stats,
+        )
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "github", "--json"]):
+            with patch.object(PackageStatsService, "fetch_github_stats", return_value=[mock_result]):
+                with self._no_config():
+                    main()
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data[0]["open_issues"] == 11
+        assert data[0]["open_issues_excl_prs"] == 4
+
+    def test_github_table_shows_issues_column(self, temp_db, capsys):
+        """The text table carries the issues-only count, or a dash if unknown."""
+        from pkgdb.github import RepoResult, RepoStats
+
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "my-pkg")
+        add_package(conn, "other-pkg")
+        conn.close()
+
+        def _stats(name, excl_prs):
+            return RepoStats(
+                owner="owner", name=name, full_name=f"owner/{name}",
+                description=None, stars=42, forks=5,
+                open_issues=11, watchers=42, language="Python",
+                license="MIT", created_at=None, updated_at=None,
+                pushed_at=None, archived=False, fork=False,
+                default_branch="main", topics=[], open_issues_excl_prs=excl_prs,
+            )
+
+        results = [
+            RepoResult(
+                package_name="my-pkg",
+                repo_url="https://github.com/owner/my-pkg",
+                stats=_stats("my-pkg", 4),
+            ),
+            RepoResult(
+                package_name="other-pkg",
+                repo_url="https://github.com/owner/other-pkg",
+                stats=_stats("other-pkg", None),
+            ),
+        ]
+
+        with patch("sys.argv", ["pkgdb", "-d", temp_db, "github"]):
+            with patch.object(PackageStatsService, "fetch_github_stats", return_value=results):
+                with self._no_config():
+                    main()
+
+        captured = capsys.readouterr()
+        assert "Issues" in captured.out
+        my_row = next(ln for ln in captured.out.splitlines() if "my-pkg" in ln)
+        other_row = next(
+            ln for ln in captured.out.splitlines() if "other-pkg" in ln
+        )
+        assert "4" in my_row.split()
+        assert "-" in other_row.split()
+        assert "11" not in captured.out
+
     def test_github_cache_json(self, temp_db, capsys):
         """github cache --json should output valid JSON."""
         conn = get_db_connection(temp_db)

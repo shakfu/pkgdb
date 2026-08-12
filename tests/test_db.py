@@ -1581,6 +1581,74 @@ class TestGithubStatsHistory:
         assert get_github_stats_history(db_conn, "tracked") != []
         assert get_github_stats_history(db_conn, "orphan") == []
 
+    def test_store_and_get_issues_excluding_prs(self, db_conn):
+        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+
+        add_package(db_conn, "pkg")
+        store_github_stats_snapshot(
+            db_conn, "pkg", "o/r", 100, 10, 9, 20, open_issues_excl_prs=4
+        )
+        rows = get_github_stats_history(db_conn, "pkg")
+        assert rows[0]["open_issues"] == 9  # GitHub's PR-inclusive figure
+        assert rows[0]["open_issues_excl_prs"] == 4
+
+    def test_issues_excluding_prs_defaults_to_unknown(self, db_conn):
+        """An unavailable count is recorded as NULL, not as zero."""
+        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+
+        add_package(db_conn, "pkg")
+        store_github_stats_snapshot(db_conn, "pkg", "o/r", 100, 10, 9, 20)
+        rows = get_github_stats_history(db_conn, "pkg")
+        assert rows[0]["open_issues_excl_prs"] is None
+
+    def test_migration_adds_column_to_existing_database(self, tmp_path):
+        """A database predating the column gains it, keeping its rows."""
+        import sqlite3
+
+        from pkgdb import get_db_connection, get_github_stats_history, init_db
+
+        db_path = str(tmp_path / "old.db")
+        old = sqlite3.connect(db_path)
+        old.execute("""
+            CREATE TABLE github_stats_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                package_name TEXT NOT NULL,
+                repo_key TEXT NOT NULL,
+                date TEXT NOT NULL,
+                stars INTEGER NOT NULL,
+                forks INTEGER NOT NULL,
+                open_issues INTEGER NOT NULL,
+                watchers INTEGER NOT NULL,
+                UNIQUE(package_name, date)
+            )
+        """)
+        old.execute(
+            "INSERT INTO github_stats_history "
+            "(package_name, repo_key, date, stars, forks, open_issues, watchers) "
+            "VALUES ('pkg', 'o/r', '2026-06-01', 100, 10, 9, 20)"
+        )
+        old.commit()
+        old.close()
+
+        conn = get_db_connection(db_path)
+        init_db(conn)
+        rows = get_github_stats_history(conn, "pkg")
+        assert len(rows) == 1
+        assert rows[0]["open_issues"] == 9
+        assert rows[0]["open_issues_excl_prs"] is None
+        conn.close()
+
+    def test_migration_is_idempotent(self, db_conn):
+        """init_db runs on every connection, so re-running must be a no-op."""
+        from pkgdb import init_db
+
+        init_db(db_conn)
+        init_db(db_conn)
+        cols = {
+            row[1] for row in db_conn.execute("PRAGMA table_info(github_stats_history)")
+        }
+        assert "open_issues_excl_prs" in cols
+
     def test_prune_removes_old_history(self, db_conn):
         from datetime import datetime
         from pkgdb import get_github_stats_history

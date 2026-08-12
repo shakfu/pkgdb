@@ -628,6 +628,10 @@ def generate_html_report(
     has_github = bool(github_stats)
     table_rows = ""
     for i, s in enumerate(stats, 1):
+        pkg = s["package_name"]
+        gh = github_stats.get(pkg) if github_stats else None
+        # Link the project name to its git repo when known; fall back to PyPI.
+        name_url = gh.repo_url if gh else f"https://pypi.org/project/{pkg}/"
         growth_cells = ""
         if has_growth:
             wg = s.get("week_growth")
@@ -638,14 +642,19 @@ def generate_html_report(
             )
         github_cells = ""
         if has_github:
-            gh = github_stats.get(s["package_name"]) if github_stats else None
             if gh:
-                repo_link = (
-                    f'<a href="https://github.com/{gh.full_name}">{gh.full_name}</a>'
+                repo_link = f'<a href="{gh.repo_url}">{gh.full_name}</a>'
+                # Pull requests are excluded, so the count is unknown rather
+                # than zero when the search API did not answer.
+                issues_link = (
+                    f'<a href="{gh.issues_url}">{gh.open_issues_excl_prs:,}</a>'
+                    if gh.open_issues_excl_prs is not None
+                    else "-"
                 )
                 github_cells = (
                     f'                <td class="number">{gh.stars:,}</td>\n'
                     f'                <td class="number">{gh.forks:,}</td>\n'
+                    f'                <td class="number">{issues_link}</td>\n'
                     f"                <td>{gh.language or '-'}</td>\n"
                     f"                <td>{gh.activity_status}</td>\n"
                     f"                <td>{repo_link}</td>\n"
@@ -654,13 +663,14 @@ def generate_html_report(
                 github_cells = (
                     '                <td class="number">-</td>\n'
                     '                <td class="number">-</td>\n'
+                    '                <td class="number">-</td>\n'
                     "                <td>-</td>\n"
                     "                <td>-</td>\n"
                     "                <td>-</td>\n"
                 )
         table_rows += f"""            <tr>
                 <td>{i}</td>
-                <td><a href="https://pypi.org/project/{s["package_name"]}/">{s["package_name"]}</a></td>
+                <td><a href="{name_url}">{pkg}</a></td>
                 <td class="number">{s["total"] or 0:,}</td>
                 <td class="number">{s["last_month"] or 0:,}</td>
                 <td class="number">{s["last_week"] or 0:,}</td>
@@ -676,6 +686,8 @@ def generate_html_report(
     )
     github_header = (
         '<th class="number">Stars</th><th class="number">Forks</th>'
+        '<th class="number" title="Open issues, excluding pull requests">'
+        "Open Issues</th>"
         "<th>Language</th><th>Activity</th><th>Repository</th>"
         if has_github
         else ""

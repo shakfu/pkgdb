@@ -1213,6 +1213,9 @@ def cmd_github(args: argparse.Namespace) -> None:
                     "star_growth": service.get_star_growth(r.package_name),
                     "forks": s.forks,
                     "open_issues": s.open_issues,
+                    # Issues only, alongside the PR-inclusive figure above.
+                    # None when the issues-only count was unavailable.
+                    "open_issues_excl_prs": s.open_issues_excl_prs,
                     "language": s.language,
                     "activity": s.activity_status,
                     "archived": s.archived,
@@ -1240,18 +1243,32 @@ def cmd_github(args: argparse.Namespace) -> None:
                 growth_str = "-"
             else:
                 growth_str = f"+{growth:,}" if growth >= 0 else f"{growth:,}"
+            issues = (
+                f"{s.open_issues_excl_prs:,}"
+                if s.open_issues_excl_prs is not None
+                else "-"
+            )
             rows.append(
                 [
                     r.package_name,
                     f"{s.stars:,}",
                     growth_str,
                     f"{s.forks:,}",
+                    issues,
                     s.activity_status,
                     s.language or "-",
                 ]
             )
 
-        headers = ["Package", "Stars", "Stars Δ", "Forks", "Activity", "Language"]
+        headers = [
+            "Package",
+            "Stars",
+            "Stars Δ",
+            "Forks",
+            "Issues",
+            "Activity",
+            "Language",
+        ]
         print(tabulate(rows, headers=headers, tablefmt="simple"))
 
         total_stars = sum(r.stats.stars for r in successful if r.stats)

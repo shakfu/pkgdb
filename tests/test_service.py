@@ -840,6 +840,24 @@ class TestServiceGithubStats:
         assert history[0]["stars"] == 200
         assert history[0]["forks"] == 20
 
+    def test_fetch_github_stats_records_issues_excluding_prs(self, temp_db):
+        service = PackageStatsService(temp_db)
+        with get_db(temp_db) as conn:
+            add_package(conn, "test-pkg")
+
+        stats = _make_repo_stats(open_issues=7, open_issues_excl_prs=2)
+        result = RepoResult(
+            package_name="test-pkg",
+            repo_url="https://github.com/test/repo",
+            stats=stats,
+        )
+        with patch("pkgdb.service.fetch_package_github_stats", return_value=result):
+            service.fetch_github_stats(packages=["test-pkg"])
+
+        history = service.get_github_history("test-pkg")
+        assert history[0]["open_issues"] == 7  # GitHub's PR-inclusive figure
+        assert history[0]["open_issues_excl_prs"] == 2
+
     def test_get_star_growth(self, temp_db):
         from pkgdb import store_github_stats_snapshot
 
