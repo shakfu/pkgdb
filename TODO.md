@@ -2,9 +2,11 @@
 
 Feature ideas for pkgdb, ordered by priority.
 
-## High Priority
+## Critical
 
-## Medium Priority
+## High
+
+## Medium
 
 ### Database Maintenance
 - [ ] Backup/restore - `pkgdb backup` / `pkgdb restore`
@@ -21,7 +23,7 @@ Feature ideas for pkgdb, ordered by priority.
 ### Organization
 - [ ] Package groups/tags - group related packages, aggregate stats per group
 
-## Low Priority
+## Low
 
 ### Comparison Mode
 - [ ] Track packages you don't own (competitors, dependencies)
