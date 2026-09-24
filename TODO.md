@@ -9,15 +9,15 @@ Feature ideas for pkgdb, ordered by priority.
 ## Medium
 
 ### Database Maintenance
-- [ ] Backup/restore - `pkgdb backup` / `pkgdb restore`
+- [ ] Backup/restore - `pkgdb backup` / `pkgdb restore` #agent
 
 ### Package Discovery
-- [ ] Import packages from pyproject.toml `[project]` section
+- [ ] Import packages from pyproject.toml `[project]` section #agent
 
 ### GitHub Integration
-- [ ] Auto-discover packages from your repos (scan for pyproject.toml) - the `github_repos` registry added for `pkgdb ci` is the prerequisite
+- [ ] Auto-discover packages from your repos (scan for pyproject.toml) - the `github_repos` registry added for `pkgdb ci` is the prerequisite #agent
 - [ ] Publish HTML report to GitHub Pages - `pkgdb publish`
-- [ ] Report CI failures as `pkgdb check` events, so one command covers downloads and CI
+- [ ] Report CI failures as `pkgdb check` events, so one command covers downloads and CI #agent
 - [ ] CI status column in the HTML report and dashboard
 
 ### Organization
@@ -26,7 +26,7 @@ Feature ideas for pkgdb, ordered by priority.
 ## Low
 
 ### Comparison Mode
-- [ ] Track packages you don't own (competitors, dependencies)
+- [ ] Track packages you don't own (competitors, dependencies) #agent
 - [ ] Side-by-side comparison charts
 
 ### Alerts
