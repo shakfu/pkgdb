@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `PKGDB_HOME` - the directory for the database, reports, `packages.json` and `config.toml`, in place of `~/.pkgdb`
+
+  - Read when a path is used, not at import. `default_db_file()`, `default_report_file()` and `default_packages_file()` replace the `DEFAULT_*` constants, which still resolve, through a module `__getattr__`, for code that imports them
+
+### Fixed
+
+- The test suite no longer writes to the real `~/.pkgdb`. The default paths were fixed at import, so the two `init` tests, which pass `-d` but not `-o`, overwrote `~/.pkgdb/report.html` on every run. A fixture now points `PKGDB_HOME` at a temporary directory for each test
+
 ## [0.3.0]
 
 ### Added

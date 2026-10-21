@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Generator
 
+from .config import pkgdb_home
 from .types import (
     CI_STATE_FAIL,
     CI_STATE_PASS,
@@ -21,14 +22,35 @@ from .utils import calculate_growth, daily_window_sums, utcnow
 
 
 def get_config_dir() -> Path:
-    """Get the pkgdb config directory (~/.pkgdb), creating it if needed."""
-    config_dir = Path.home() / ".pkgdb"
-    config_dir.mkdir(exist_ok=True)
+    """Get the pkgdb directory ($PKGDB_HOME, else ~/.pkgdb), creating it if needed."""
+    config_dir = pkgdb_home()
+    config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
 
 
-DEFAULT_DB_FILE = str(get_config_dir() / "pkg.db")
-DEFAULT_REPORT_FILE = str(get_config_dir() / "report.html")
+def default_db_file() -> str:
+    """The default database path, in the pkgdb directory."""
+    return str(get_config_dir() / "pkg.db")
+
+
+def default_report_file() -> str:
+    """The default HTML report path, in the pkgdb directory."""
+    return str(get_config_dir() / "report.html")
+
+
+# Constants computed at import fixed the directory before PKGDB_HOME could be
+# set, so a test or a second environment wrote to the real ~/.pkgdb.
+_DEFAULTS = {
+    "DEFAULT_DB_FILE": default_db_file,
+    "DEFAULT_REPORT_FILE": default_report_file,
+}
+
+
+def __getattr__(name: str) -> str:
+    """The former `DEFAULT_*` constants, resolved when read (PEP 562)."""
+    if name in _DEFAULTS:
+        return _DEFAULTS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # Membership predicate used by the `tracked_only` read options. Package-owned
 # data outlives `remove_package()` so that `cleanup` stays the single physical

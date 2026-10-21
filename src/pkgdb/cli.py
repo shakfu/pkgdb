@@ -11,7 +11,7 @@ import webbrowser
 from tabulate import tabulate
 
 from .config import PkgdbConfig, load_config
-from .db import DEFAULT_DB_FILE, DEFAULT_REPORT_FILE, get_config_dir, get_db
+from .db import default_db_file, default_report_file, get_config_dir, get_db
 from .db import get_next_update_seconds
 from .github import CI_RUN_WINDOW
 from .logging import setup_logging
@@ -23,8 +23,27 @@ from . import __version__
 logger = logging.getLogger("pkgdb")
 
 
-DEFAULT_PACKAGES_FILE = str(get_config_dir() / "packages.json")
-DEFAULT_CI_REPORT_FILE = str(get_config_dir() / "ci-report.html")
+def default_packages_file() -> str:
+    """The default packages file, in the pkgdb directory."""
+    return str(get_config_dir() / "packages.json")
+
+
+def default_ci_report_file() -> str:
+    """The default CI report path, in the pkgdb directory."""
+    return str(get_config_dir() / "ci-report.html")
+
+
+_DEFAULTS = {
+    "DEFAULT_PACKAGES_FILE": default_packages_file,
+    "DEFAULT_CI_REPORT_FILE": default_ci_report_file,
+}
+
+
+def __getattr__(name: str) -> str:
+    """The former `DEFAULT_*` constants, resolved when read (PEP 562)."""
+    if name in _DEFAULTS:
+        return _DEFAULTS[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def load_packages(packages_file: str) -> list[str]:
@@ -853,7 +872,7 @@ def cmd_history(args: argparse.Namespace) -> None:
             logger.warning("No data found for package '%s'.", args.package)
         return
 
-    output_file = getattr(args, "output", DEFAULT_REPORT_FILE)
+    output_file = getattr(args, "output", None) or default_report_file()
     no_browser = getattr(args, "no_browser", False)
 
     if not service.generate_project_report(
@@ -1604,7 +1623,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     )
 
     # Generate report
-    output = getattr(args, "output", DEFAULT_REPORT_FILE)
+    output = getattr(args, "output", None) or default_report_file()
     no_browser = getattr(args, "no_browser", False)
 
     if service.generate_report(output):
@@ -1624,8 +1643,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-d",
         "--database",
-        default=DEFAULT_DB_FILE,
-        help=f"SQLite database file (default: {DEFAULT_DB_FILE})",
+        default=default_db_file(),
+        help=f"SQLite database file (default: {default_db_file()})",
     )
     parser.add_argument(
         "-v",
@@ -1725,8 +1744,8 @@ def create_parser() -> argparse.ArgumentParser:
     import_parser.add_argument(
         "file",
         nargs="?",
-        default=DEFAULT_PACKAGES_FILE,
-        help=f"File to import from - supports .json or plain text (default: {DEFAULT_PACKAGES_FILE})",
+        default=default_packages_file(),
+        help=f"File to import from - supports .json or plain text (default: {default_packages_file()})",
     )
     import_parser.add_argument(
         "--no-verify",
@@ -1880,8 +1899,8 @@ def create_parser() -> argparse.ArgumentParser:
     report_parser.add_argument(
         "-o",
         "--output",
-        default=DEFAULT_REPORT_FILE,
-        help=f"Output HTML file (default: {DEFAULT_REPORT_FILE})",
+        default=default_report_file(),
+        help=f"Output HTML file (default: {default_report_file()})",
     )
     report_parser.add_argument(
         "-e",
@@ -1961,8 +1980,8 @@ def create_parser() -> argparse.ArgumentParser:
     history_parser.add_argument(
         "-o",
         "--output",
-        default=DEFAULT_REPORT_FILE,
-        help=f"Output HTML file (default: {DEFAULT_REPORT_FILE})",
+        default=default_report_file(),
+        help=f"Output HTML file (default: {default_report_file()})",
     )
     history_parser.add_argument(
         "--no-browser",
@@ -2025,8 +2044,8 @@ def create_parser() -> argparse.ArgumentParser:
     update_parser.add_argument(
         "-o",
         "--output",
-        default=DEFAULT_REPORT_FILE,
-        help=f"Output HTML file (default: {DEFAULT_REPORT_FILE})",
+        default=default_report_file(),
+        help=f"Output HTML file (default: {default_report_file()})",
     )
     update_parser.add_argument(
         "-e",
@@ -2217,9 +2236,9 @@ def create_parser() -> argparse.ArgumentParser:
         "-o",
         "--output",
         nargs="?",
-        const=DEFAULT_CI_REPORT_FILE,
+        const=default_ci_report_file(),
         help=(
-            f"Also write an HTML report and open it (default: {DEFAULT_CI_REPORT_FILE})"
+            f"Also write an HTML report and open it (default: {default_ci_report_file()})"
         ),
     )
     ci_parser.add_argument(
@@ -2301,8 +2320,8 @@ def create_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "-o",
         "--output",
-        default=DEFAULT_REPORT_FILE,
-        help=f"Output HTML file (default: {DEFAULT_REPORT_FILE})",
+        default=default_report_file(),
+        help=f"Output HTML file (default: {default_report_file()})",
     )
     init_parser.add_argument(
         "--no-browser",
@@ -2328,11 +2347,14 @@ def apply_config(args: argparse.Namespace, config: PkgdbConfig) -> None:
     fill in defaults that weren't explicitly provided on the command line.
     """
     # Database path: config overrides the hardcoded default, CLI overrides config
-    if config.database and args.database == DEFAULT_DB_FILE:
+    if config.database and args.database == default_db_file():
         args.database = config.database
 
     # Report output: config overrides the hardcoded default
-    if config.report_output and getattr(args, "output", None) == DEFAULT_REPORT_FILE:
+    if (
+        config.report_output
+        and getattr(args, "output", None) == default_report_file()
+    ):
         args.output = config.report_output
 
     # Boolean flags: config sets them if CLI didn't

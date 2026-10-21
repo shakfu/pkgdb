@@ -10,8 +10,8 @@ from pkgdb import (
     load_config,
     get_config_path,
     apply_config,
-    DEFAULT_DB_FILE,
-    DEFAULT_REPORT_FILE,
+    default_db_file,
+    default_report_file,
 )
 
 
@@ -127,11 +127,13 @@ class TestConfig:
         config = load_config(config_path)
         assert config._raw.get("custom", {}).get("key") == "value"
 
-    def test_get_config_path(self):
-        """get_config_path returns expected path."""
-        path = get_config_path()
-        assert path.name == "config.toml"
-        assert path.parent.name == ".pkgdb"
+    def test_get_config_path(self, tmp_path, monkeypatch):
+        """config.toml is in $PKGDB_HOME, else in ~/.pkgdb."""
+        monkeypatch.setenv("PKGDB_HOME", str(tmp_path / "elsewhere"))
+        assert get_config_path() == tmp_path / "elsewhere" / "config.toml"
+        monkeypatch.delenv("PKGDB_HOME")
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert get_config_path() == tmp_path / ".pkgdb" / "config.toml"
 
     def test_pkgdb_config_defaults(self):
         """PkgdbConfig has correct default values."""
@@ -151,8 +153,8 @@ class TestApplyConfig:
     def _make_args(self, **kwargs):
         """Create a Namespace with sensible defaults."""
         defaults = {
-            "database": DEFAULT_DB_FILE,
-            "output": DEFAULT_REPORT_FILE,
+            "database": default_db_file(),
+            "output": default_report_file(),
             "github": False,
             "env": False,
             "no_browser": False,
@@ -215,7 +217,7 @@ class TestApplyConfig:
     def test_config_does_not_add_missing_attrs(self):
         """Config should not add attributes that don't exist on args."""
         # Simulates a command like 'version' that has no 'env' attribute
-        args = argparse.Namespace(database=DEFAULT_DB_FILE)
+        args = argparse.Namespace(database=default_db_file())
         config = PkgdbConfig(environment=True)
         apply_config(args, config)
         # env should not have been added since it didn't exist
