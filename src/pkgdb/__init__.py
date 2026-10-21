@@ -30,8 +30,8 @@ from .checks import (
     weekly_totals,
 )
 from .cli import (
-    DEFAULT_PACKAGES_FILE,
     apply_config,
+    default_packages_file,
     import_packages_from_file,
     load_packages,
     load_packages_from_file,
@@ -40,11 +40,10 @@ from .cli import (
 from .config import (
     PkgdbConfig,
     get_config_path,
+    pkgdb_home,
     load_config,
 )
 from .db import (
-    DEFAULT_DB_FILE,
-    DEFAULT_REPORT_FILE,
     REPO_SOURCE_DISCOVER,
     REPO_SOURCE_MANUAL,
     REPO_SOURCE_PACKAGE,
@@ -69,6 +68,8 @@ from .db import (
     get_cached_env_summary,
     get_cached_os_stats,
     get_cached_python_versions,
+    default_db_file,
+    default_report_file,
     get_config_dir,
     get_daily_downloads,
     get_database_stats,
@@ -200,6 +201,7 @@ __all__ = [
     "weekly_totals",
     # CLI
     "DEFAULT_PACKAGES_FILE",
+    "default_packages_file",
     "apply_config",
     "import_packages_from_file",
     "load_packages",
@@ -208,10 +210,13 @@ __all__ = [
     # Config
     "PkgdbConfig",
     "get_config_path",
+    "pkgdb_home",
     "load_config",
     # Database
     "DEFAULT_DB_FILE",
     "DEFAULT_REPORT_FILE",
+    "default_db_file",
+    "default_report_file",
     "REPO_SOURCE_DISCOVER",
     "REPO_SOURCE_MANUAL",
     "REPO_SOURCE_PACKAGE",
@@ -336,3 +341,16 @@ __all__ = [
     "validate_output_path",
     "validate_package_name",
 ]
+
+
+def __getattr__(name: str) -> str:
+    """The former `DEFAULT_*` constants, resolved when read (PEP 562), so
+    PKGDB_HOME set after import still applies."""
+    defaults = {
+        "DEFAULT_DB_FILE": default_db_file,
+        "DEFAULT_REPORT_FILE": default_report_file,
+        "DEFAULT_PACKAGES_FILE": default_packages_file,
+    }
+    if name in defaults:
+        return defaults[name]()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

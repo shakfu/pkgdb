@@ -76,7 +76,7 @@ CLI flags always override config values.
 
 ## Data storage
 
-All data is stored locally in `~/.pkgdb/`:
+All data is stored locally in `~/.pkgdb/`. Set `PKGDB_HOME` to use another directory:
 
 | File | Purpose |
 |------|---------|

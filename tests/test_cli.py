@@ -22,9 +22,9 @@ from pkgdb import (
     record_fetch_attempt,
     load_packages,
     get_config_dir,
-    DEFAULT_DB_FILE,
-    DEFAULT_PACKAGES_FILE,
-    DEFAULT_REPORT_FILE,
+    default_db_file,
+    default_packages_file,
+    default_report_file,
     PackageStatsService,
     RepoStats,
     RepoResult,
@@ -65,9 +65,23 @@ class TestCLI:
     def test_default_values(self):
         """Default values should be set correctly."""
         config_dir = get_config_dir()
-        assert DEFAULT_DB_FILE == str(config_dir / "pkg.db")
-        assert DEFAULT_PACKAGES_FILE == str(config_dir / "packages.json")
-        assert DEFAULT_REPORT_FILE == str(config_dir / "report.html")
+        assert default_db_file() == str(config_dir / "pkg.db")
+        assert default_packages_file() == str(config_dir / "packages.json")
+        assert default_report_file() == str(config_dir / "report.html")
+
+    def test_defaults_follow_pkgdb_home_set_after_import(self, tmp_path, monkeypatch):
+        """PKGDB_HOME applies when set after import, to the functions and to
+        the `DEFAULT_*` names kept for compatibility."""
+        import pkgdb
+
+        home = tmp_path / "home"
+        monkeypatch.setenv("PKGDB_HOME", str(home))
+        assert get_config_dir() == home and home.is_dir()
+        assert default_report_file() == str(home / "report.html")
+        assert pkgdb.DEFAULT_DB_FILE == str(home / "pkg.db")
+        assert pkgdb.DEFAULT_REPORT_FILE == str(home / "report.html")
+        assert pkgdb.DEFAULT_PACKAGES_FILE == str(home / "packages.json")
+        assert pkgdb.cli.DEFAULT_CI_REPORT_FILE == str(home / "ci-report.html")
 
     def test_main_no_command_shows_help(self, capsys):
         """main() with no command should print help."""

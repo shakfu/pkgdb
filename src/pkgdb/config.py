@@ -1,10 +1,11 @@
 """Configuration file support for pkgdb.
 
-Loads settings from ~/.pkgdb/config.toml, providing persistent defaults
-that CLI flags can override.
+Loads settings from config.toml in the pkgdb directory ($PKGDB_HOME, else
+~/.pkgdb), providing persistent defaults that CLI flags can override.
 """
 
 import logging
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,9 +23,14 @@ else:
         tomllib = None  # type: ignore[assignment]
 
 
+def pkgdb_home() -> Path:
+    """The pkgdb directory: $PKGDB_HOME when set, else ~/.pkgdb. Not created."""
+    return Path(os.environ.get("PKGDB_HOME") or Path.home() / ".pkgdb")
+
+
 def get_config_path() -> Path:
-    """Get the path to the config file (~/.pkgdb/config.toml)."""
-    return Path.home() / ".pkgdb" / "config.toml"
+    """Get the path to the config file (config.toml in the pkgdb directory)."""
+    return pkgdb_home() / "config.toml"
 
 
 @dataclass

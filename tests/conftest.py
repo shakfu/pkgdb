@@ -40,6 +40,17 @@ def _is_local(address) -> bool:
 
 
 @pytest.fixture(autouse=True)
+def isolate_pkgdb_home(tmp_path_factory, monkeypatch):
+    """Point the pkgdb directory at a throwaway one.
+
+    Every default path -- database, reports, packages file, config.toml --
+    lives there, so a test that leaves one at its default would otherwise
+    read or overwrite the developer's real ~/.pkgdb.
+    """
+    monkeypatch.setenv("PKGDB_HOME", str(tmp_path_factory.mktemp("pkgdb-home")))
+
+
+@pytest.fixture(autouse=True)
 def isolate_pypistats_cache(tmp_path_factory, monkeypatch):
     """Point pypistats at a throwaway cache directory.
 

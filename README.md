@@ -545,7 +545,7 @@ Source modules in `src/pkgdb/`:
 
 - `logging.py`: Logging configuration
 
-Data files (all in `~/.pkgdb/`):
+Data files (all in `~/.pkgdb/`, or in `$PKGDB_HOME` when it is set):
 - `config.toml`: Configuration file for persistent defaults (optional)
 
 - `packages.json`: Package list configuration (optional, can use `add` command instead)
