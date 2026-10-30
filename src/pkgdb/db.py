@@ -1,6 +1,8 @@
 """Database operations for pkgdb."""
 
 import json
+import os
+import shutil
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -75,6 +77,89 @@ def get_db(db_path: str) -> Generator[sqlite3.Connection, None, None]:
         yield conn
     finally:
         conn.close()
+
+
+def _validate_database(path: Path) -> None:
+    """Raise ValueError unless ``path`` is an intact pkgdb database."""
+    if not path.is_file():
+        raise ValueError(f"Database not found: {path}")
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        status = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        if status != "ok":
+            raise ValueError(f"{path} failed its integrity check: {status}")
+        has_packages = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'packages'"
+        ).fetchone()
+        if not has_packages:
+            raise ValueError(f"{path} is not a pkgdb database")
+    except sqlite3.DatabaseError as e:
+        raise ValueError(f"{path} is not a readable database: {e}") from e
+    finally:
+        conn.close()
+
+
+def _copy_database(source: Path, dest: Path) -> None:
+    """Copy a live database, replacing ``dest`` only once the copy is complete."""
+    temp = dest.with_name(dest.name + ".tmp")
+    try:
+        src_conn = sqlite3.connect(f"{source.resolve().as_uri()}?mode=ro", uri=True)
+        dest_conn = sqlite3.connect(temp)
+        try:
+            src_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+            src_conn.close()
+        os.replace(temp, dest)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def backup_database(db_path: str, dest: str, force: bool = False) -> None:
+    """Write a consistent copy of the database to ``dest``.
+
+    Raises:
+        ValueError: The database is missing or corrupt, or ``dest`` is the
+            database itself.
+        FileExistsError: ``dest`` exists and ``force`` is False.
+    """
+    source, target = Path(db_path), Path(dest)
+    _validate_database(source)
+    if target.exists():
+        if target.resolve() == source.resolve():
+            raise ValueError("Backup destination is the database itself")
+        if not force:
+            raise FileExistsError(f"{target} already exists")
+    _copy_database(source, target)
+
+
+def restore_database(db_path: str, source: str) -> str | None:
+    """Replace the database with the backup at ``source``.
+
+    The current database is kept beside it first, by raw file copy so that a
+    corrupt database can still be restored over. Backups from older versions
+    are migrated by ``init_db`` on next open.
+
+    Returns:
+        The path of the kept copy, or None if there was no database to keep.
+
+    Raises:
+        ValueError: ``source`` is not an intact pkgdb database, or is the
+            database itself.
+    """
+    backup, target = Path(source), Path(db_path)
+    _validate_database(backup)
+    kept: str | None = None
+    if target.exists():
+        if target.resolve() == backup.resolve():
+            raise ValueError("Backup is the database itself")
+        stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+        kept = f"{target}.pre-restore-{stamp}"
+        if Path(kept).exists():
+            raise FileExistsError(f"{kept} already exists")
+        shutil.copy2(target, kept)
+    _copy_database(backup, target)
+    return kept
 
 
 def _add_column_if_missing(
@@ -426,6 +511,15 @@ def get_tags_map(conn: sqlite3.Connection) -> dict[str, list[str]]:
     result: dict[str, list[str]] = {}
     for row in cursor.fetchall():
         result.setdefault(row["tag"], []).append(row["package_name"])
+    return result
+
+
+def get_tags_by_package(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    """Return a mapping of package name -> sorted list of its tags."""
+    result: dict[str, list[str]] = {}
+    for tag, members in get_tags_map(conn).items():
+        for package in members:
+            result.setdefault(package, []).append(tag)
     return result
 
 

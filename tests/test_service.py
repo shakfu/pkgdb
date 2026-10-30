@@ -494,6 +494,21 @@ class TestPackageStatsService:
         finally:
             Path(output_path).unlink(missing_ok=True)
 
+    def test_service_generate_report_includes_tags(self, temp_db, tmp_path):
+        service = PackageStatsService(temp_db)
+        service.add_package("my-package", verify=False)
+        service.add_tag("my-package", "web")
+        with get_db(temp_db) as conn:
+            store_stats(
+                conn,
+                "my-package",
+                {"last_day": 1, "last_week": 7, "last_month": 30, "total": 100},
+            )
+        output = tmp_path / "report.html"
+
+        assert service.generate_report(str(output))
+        assert "<th>Tags</th>" in output.read_text()
+
     def test_service_generate_report_empty(self, temp_db):
         """Service should return False for empty report."""
         service = PackageStatsService(temp_db)
@@ -635,6 +650,89 @@ class TestPackageStatsService:
         # Verify packages were removed
         packages = [p.name for p in service.list_packages()]
         assert packages == ["common-pkg"]
+
+
+class TestServiceSyncSafeguards:
+    """A wrong username must not change the tracked list, and pruning is undoable."""
+
+    @pytest.mark.parametrize("prune", [False, True])
+    def test_no_overlap_changes_nothing(self, temp_db, prune):
+        service = PackageStatsService(temp_db)
+        service.add_package("mine", verify=False)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["theirs"]
+            result = service.sync_packages_from_user("typo", prune=prune)
+
+        assert result.no_overlap
+        assert result.added == []
+        assert result.pruned == []
+        assert result.backup is None
+        assert [p.name for p in service.list_packages()] == ["mine"]
+
+    def test_force_proceeds_without_overlap(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("old-account-pkg", verify=False)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["new-account-pkg"]
+            result = service.sync_packages_from_user(
+                "newname", prune=True, force=True
+            )
+
+        assert not result.no_overlap
+        assert result.added == ["new-account-pkg"]
+        assert result.pruned == ["old-account-pkg"]
+
+    def test_first_sync_is_not_blocked(self, temp_db):
+        service = PackageStatsService(temp_db)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["pkg-a"]
+            result = service.sync_packages_from_user("user")
+
+        assert not result.no_overlap
+        assert result.added == ["pkg-a"]
+
+    def test_prune_backup_restores_pre_sync_state(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("removed", verify=False)
+        service.add_package("common", verify=False)
+        service.add_tag("removed", "web")
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["common", "added"]
+            result = service.sync_packages_from_user("user", prune=True)
+
+        assert result.pruned == ["removed"]
+        service.restore(result.backup)
+        assert sorted(p.name for p in service.list_packages()) == ["common", "removed"]
+        assert service.get_package_tags("removed") == ["web"]
+
+    def test_no_backup_without_removals(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("common", verify=False)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["common"]
+            result = service.sync_packages_from_user("user", prune=True)
+
+        assert result.backup is None
+
+    def test_failed_backup_changes_nothing(self, temp_db):
+        service = PackageStatsService(temp_db)
+        service.add_package("removed", verify=False)
+        service.add_package("common", verify=False)
+
+        with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
+            mock_fetch.return_value = ["common", "added"]
+            with patch(
+                "pkgdb.service.backup_database", side_effect=OSError("disk full")
+            ):
+                with pytest.raises(OSError):
+                    service.sync_packages_from_user("user", prune=True)
+
+        assert sorted(p.name for p in service.list_packages()) == ["common", "removed"]
 
 
 class TestServicePathValidation:

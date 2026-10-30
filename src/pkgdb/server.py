@@ -8,6 +8,7 @@ from importlib import resources
 from typing import Any
 from urllib.parse import unquote, urlparse, parse_qs
 
+from .reports import package_ci_states
 from .service import PackageStatsService
 
 logger = logging.getLogger("pkgdb")
@@ -91,6 +92,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         if path == "/api/packages":
             stats = svc.get_stats(with_growth=True)
+            tags = svc.get_tags_by_package()
+            ci_states = package_ci_states(svc.get_ci_rows())
+            for s in stats:
+                s["tags"] = tags.get(s["package_name"], [])
+                s["ci_state"] = ci_states.get(s["package_name"])
             self._respond_json(stats)
 
         elif path == "/api/history":
@@ -206,6 +212,7 @@ def start_server(
     db_path: str,
     port: int = 8080,
     open_browser: bool = True,
+    host: str = "127.0.0.1",
 ) -> None:
     """Start the dashboard HTTP server.
 
@@ -213,11 +220,12 @@ def start_server(
         db_path: Path to the SQLite database.
         port: Port to listen on.
         open_browser: Whether to open the dashboard in a browser.
+        host: Interface to bind. The dashboard has no authentication.
     """
     service = PackageStatsService(db_path)
 
     try:
-        server = HTTPServer(("", port), DashboardHandler)
+        server = HTTPServer((host, port), DashboardHandler)
     except OSError as e:
         if "Address already in use" in str(e) or getattr(e, "errno", 0) == 48:
             logger.error(
@@ -229,8 +237,15 @@ def start_server(
 
     server.service = service  # type: ignore[attr-defined]
 
-    url = f"http://localhost:{port}"
+    url_host = "localhost" if host in ("", "0.0.0.0", "127.0.0.1") else host
+    url = f"http://{url_host}:{port}"
     logger.info("Dashboard running at %s", url)
+    if host not in ("127.0.0.1", "localhost"):
+        logger.warning(
+            "Listening on %s without authentication; "
+            "anyone who can reach this port can read the dashboard.",
+            host,
+        )
     logger.info("Press Ctrl+C to stop.")
 
     if open_browser:

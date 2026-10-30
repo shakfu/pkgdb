@@ -232,7 +232,7 @@ def generate_overview_page() -> str:
 <div class="card">
 <h2>Tracked Packages</h2>
 <input type="text" class="filter-input" id="pkg-filter"
-       placeholder="Filter packages..." autocomplete="off">
+       placeholder="Filter by package or tag..." autocomplete="off">
 <div id="stats-summary" class="stats-row"></div>
 <div id="pkg-table-wrap">
 <p class="loading" id="loading-msg">Loading package data...</p>
@@ -318,6 +318,12 @@ function growthBadge(val) {{
     return '<span class="' + cls + '">' + sign + val.toFixed(1) + '%</span>';
 }}
 
+function ciBadge(state) {{
+    if (!state) return "-";
+    var cls = state === "FAIL" ? "growth-neg" : state === "PASS" ? "growth-pos" : "growth-neutral";
+    return '<span class="' + cls + '">' + esc(state) + '</span>';
+}}
+
 function renderOverview(packages) {{
     // Summary cards
     var totalPkgs = packages.length;
@@ -331,9 +337,14 @@ function renderOverview(packages) {{
         '<div class="stat-card"><div class="value">' + fmt(totalMonth) + '</div><div class="label">Last Month</div></div>' +
         '<div class="stat-card"><div class="value">' + fmt(totalWeek) + '</div><div class="label">Last Week</div></div>';
 
+    // The CI column stays hidden until a scan has run, like the CI panel.
+    var hasCI = packages.some(function(p) {{ return p.ci_state; }});
+
     // Build table
     var html = '<table id="pkg-table"><thead><tr>' +
         '<th data-col="package_name" data-type="string">Package <span class="sort-arrow"></span></th>' +
+        '<th>Tags</th>' +
+        (hasCI ? '<th data-col="ci_state" data-type="string">CI <span class="sort-arrow"></span></th>' : '') +
         '<th data-col="total" data-type="number" class="number">Total <span class="sort-arrow"></span></th>' +
         '<th data-col="last_month" data-type="number" class="number">Month <span class="sort-arrow"></span></th>' +
         '<th data-col="last_week" data-type="number" class="number">Week <span class="sort-arrow"></span></th>' +
@@ -346,6 +357,8 @@ function renderOverview(packages) {{
         var p = packages[i];
         html += '<tr data-name="' + (p.package_name || "").toLowerCase() + '">' +
             '<td><a class="pkg-link" href="/package/' + encodeURIComponent(p.package_name) + '">' + p.package_name + '</a></td>' +
+            '<td class="pkg-tags">' + esc((p.tags || []).join(", ")) + '</td>' +
+            (hasCI ? '<td>' + ciBadge(p.ci_state) + '</td>' : '') +
             '<td class="number">' + fmt(p.total) + '</td>' +
             '<td class="number">' + fmt(p.last_month) + '</td>' +
             '<td class="number">' + fmt(p.last_week) + '</td>' +
@@ -390,7 +403,9 @@ function renderOverview(packages) {{
         var q = e.target.value.toLowerCase();
         var rows = document.querySelectorAll("#pkg-table tbody tr");
         rows.forEach(function(row) {{
-            row.style.display = row.getAttribute("data-name").indexOf(q) >= 0 ? "" : "none";
+            var tags = row.querySelector(".pkg-tags").textContent.toLowerCase();
+            var match = row.getAttribute("data-name").indexOf(q) >= 0 || tags.indexOf(q) >= 0;
+            row.style.display = match ? "" : "none";
         }});
     }});
 }}

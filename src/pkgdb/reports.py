@@ -601,6 +601,25 @@ def _ci_state_badge(state: str) -> str:
     return f'<span class="ci-state {css}">{html.escape(state)}</span>'
 
 
+def package_ci_states(ci_status: list[dict[str, Any]]) -> dict[str, str]:
+    """Reduce CI rows to one state per package.
+
+    FAIL if any workflow fails, PASS only if all pass, otherwise the first other
+    state by name, because a running or unknown workflow does not establish a pass.
+    """
+    by_package: dict[str, set[str]] = {}
+    for row in ci_status:
+        for package in row.get("packages") or []:
+            by_package.setdefault(package, set()).add(row["state"])
+
+    def reduce_states(states: set[str]) -> str:
+        if CI_STATE_FAIL in states:
+            return CI_STATE_FAIL
+        return min(states - {CI_STATE_PASS}, default=CI_STATE_PASS)
+
+    return {package: reduce_states(states) for package, states in by_package.items()}
+
+
 def build_ci_section(ci_status: list[dict[str, Any]], show_all: bool = False) -> str:
     """Render the CI status table.
 
@@ -699,6 +718,7 @@ def generate_html_report(
     env_summary: EnvSummary | None = None,
     github_stats: dict[str, RepoStats] | None = None,
     ci_status: list[dict[str, Any]] | None = None,
+    tags: dict[str, list[str]] | None = None,
 ) -> None:
     """Generate a self-contained HTML report with inline SVG charts.
 
@@ -710,6 +730,7 @@ def generate_html_report(
         env_summary: Pre-fetched Python version and OS summary data
         github_stats: Dict mapping package names to RepoStats (optional)
         ci_status: CI rows from PackageStatsService.get_ci_rows() (optional)
+        tags: Dict mapping package names to their tags (optional)
     """
     if not stats:
         logger.warning("No statistics available to generate report.")
@@ -759,9 +780,21 @@ def generate_html_report(
     # Build stats table rows
     has_growth = any("week_growth" in s for s in stats)
     has_github = bool(github_stats)
+    tags = tags or {}
+    has_tags = any(s["package_name"] in tags for s in stats)
+    ci_states = package_ci_states(ci_status) if ci_status else {}
     table_rows = ""
     for i, s in enumerate(stats, 1):
         pkg = s["package_name"]
+        ci_cell = ""
+        if ci_states:
+            state = ci_states.get(pkg)
+            badge = _ci_state_badge(state) if state else "-"
+            ci_cell = f"                <td>{badge}</td>\n"
+        tags_cell = ""
+        if has_tags:
+            pkg_tags = html.escape(", ".join(tags.get(pkg, [])) or "-")
+            tags_cell = f"                <td>{pkg_tags}</td>\n"
         gh = github_stats.get(pkg) if github_stats else None
         # Link the project name to its git repo when known; fall back to PyPI.
         name_url = gh.repo_url if gh else f"https://pypi.org/project/{pkg}/"
@@ -804,7 +837,7 @@ def generate_html_report(
         table_rows += f"""            <tr>
                 <td>{i}</td>
                 <td><a href="{name_url}">{pkg}</a></td>
-                <td class="number">{s["total"] or 0:,}</td>
+{tags_cell}{ci_cell}                <td class="number">{s["total"] or 0:,}</td>
                 <td class="number">{s["last_month"] or 0:,}</td>
                 <td class="number">{s["last_week"] or 0:,}</td>
                 <td class="number">{s["last_day"] or 0:,}</td>
@@ -858,6 +891,8 @@ def generate_html_report(
             <tr>
                 <th>Rank</th>
                 <th>Package</th>
+                {"<th>Tags</th>" if has_tags else ""}
+                {"<th>CI</th>" if ci_states else ""}
                 <th class="number">Total</th>
                 <th class="number">Last Month</th>
                 <th class="number">Last Week</th>
@@ -871,10 +906,10 @@ def generate_html_report(
     </table>
 """
 
-    html = _render_html_document("PyPI Package Download Statistics", body_content)
+    document = _render_html_document("PyPI Package Download Statistics", body_content)
 
     with open(output_file, "w") as f:
-        f.write(html)
+        f.write(document)
     logger.info("Report generated: %s", output_file)
 
 

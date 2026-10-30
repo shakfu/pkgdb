@@ -25,6 +25,7 @@ from .db import (
     REPO_SOURCE_PACKAGE,
     add_package,
     add_package_tag,
+    backup_database,
     add_repo,
     cleanup_orphaned_stats,
     get_ci_status,
@@ -58,6 +59,7 @@ from .db import (
     get_packages_needing_update,
     set_milestone_high_water,
     get_pypi_releases,
+    get_tags_by_package,
     get_tags_map,
     store_daily_downloads,
     store_env_stats,
@@ -69,6 +71,7 @@ from .db import (
     record_fetch_attempt,
     remove_package,
     remove_package_tag,
+    restore_database,
     store_stats,
 )
 from .badges import generate_downloads_badge
@@ -172,6 +175,8 @@ class SyncResult:
     already_tracked: list[str]
     not_on_remote: list[str]
     pruned: list[str]
+    no_overlap: bool = False
+    backup: str | None = None
 
 
 @dataclass
@@ -356,7 +361,7 @@ class PackageStatsService:
         return added, skipped, invalid, not_found
 
     def sync_packages_from_user(
-        self, username: str, prune: bool = False
+        self, username: str, prune: bool = False, force: bool = False
     ) -> SyncResult | None:
         """Sync tracked packages with a PyPI user's current packages.
 
@@ -367,12 +372,18 @@ class PackageStatsService:
         Args:
             username: PyPI username to fetch packages from.
             prune: If True, remove locally tracked packages not in user's
-                PyPI account.
+                PyPI account. The database is backed up beside itself first.
+            force: If True, proceed when the account shares no packages with
+                the tracked list. Otherwise that is treated as a wrong username:
+                nothing changes and ``no_overlap`` is set.
 
         Returns:
             SyncResult with lists of added, already tracked, packages
             not on remote, and pruned packages.
             Returns None if unable to fetch from PyPI.
+
+        Raises:
+            ValueError, OSError, sqlite3.Error: The backup failed; nothing changed.
         """
         remote_packages = fetch_user_packages(username)
         if remote_packages is None:
@@ -389,6 +400,23 @@ class PackageStatsService:
         # Packages tracked locally but not on remote
         not_on_remote = local_set - remote_set
 
+        if remote_set and local_set and not already_tracked and not force:
+            return SyncResult(
+                added=[],
+                already_tracked=[],
+                not_on_remote=sorted(not_on_remote),
+                pruned=[],
+                no_overlap=True,
+            )
+
+        # An empty listing can mean a mistyped username, so it never prunes.
+        will_prune = prune and bool(remote_set) and bool(not_on_remote)
+        backup: str | None = None
+        if will_prune:
+            stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+            backup = f"{self.db_path}.pre-prune-{stamp}"
+            backup_database(self.db_path, backup)
+
         added: list[str] = []
         for pkg in sorted(to_add):
             # Skip verification since packages come from PyPI's user_packages API
@@ -396,7 +424,7 @@ class PackageStatsService:
                 added.append(pkg)
 
         pruned: list[str] = []
-        if prune:
+        if will_prune:
             for pkg in sorted(not_on_remote):
                 if self.remove_package(pkg):
                     pruned.append(pkg)
@@ -406,6 +434,7 @@ class PackageStatsService:
             already_tracked=sorted(already_tracked),
             not_on_remote=sorted(not_on_remote),
             pruned=pruned,
+            backup=backup,
         )
 
     # -------------------------------------------------------------------------
@@ -548,6 +577,11 @@ class PackageStatsService:
         """Get the sorted tags for a package."""
         with get_db(self.db_path) as conn:
             return get_package_tags(conn, package)
+
+    def get_tags_by_package(self) -> dict[str, list[str]]:
+        """Get each tagged package's sorted tags."""
+        with get_db(self.db_path) as conn:
+            return get_tags_by_package(conn)
 
     def get_tag_summary(self) -> list[dict[str, Any]]:
         """Aggregate latest download stats per tag (a portfolio rollup).
@@ -849,6 +883,7 @@ class PackageStatsService:
 
             all_history = get_all_history(conn, limit_per_package=30, tracked_only=True)
             packages = [s["package_name"] for s in stats]
+            tags = get_tags_by_package(conn)
 
             env_summary = get_cached_env_summary(conn) if include_env else None
             if include_env and env_summary is None:
@@ -876,6 +911,7 @@ class PackageStatsService:
             env_summary,
             github_stats,
             ci_rows,
+            tags,
         )
         return True
 
@@ -1730,6 +1766,14 @@ class PackageStatsService:
         """
         with get_db(self.db_path) as conn:
             return prune_old_stats(conn, days)
+
+    def backup(self, dest: str, force: bool = False) -> None:
+        """Write a consistent copy of the database to ``dest``."""
+        backup_database(self.db_path, dest, force=force)
+
+    def restore(self, source: str) -> str | None:
+        """Replace the database from a backup; returns the kept copy's path."""
+        return restore_database(self.db_path, source)
 
     def get_database_info(self) -> DatabaseInfo:
         """Get database statistics and metadata.

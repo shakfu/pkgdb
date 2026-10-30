@@ -19,6 +19,7 @@ from pkgdb import (
     PyPIRelease,
     GitHubRelease,
 )
+from pkgdb.reports import package_ci_states
 from pkgdb.utils import utcnow
 
 
@@ -51,6 +52,64 @@ class TestHTMLReportGeneration:
             assert "cdn" not in content.lower()
         finally:
             Path(output_path).unlink(missing_ok=True)
+
+    def test_generate_html_report_tags_column(self, tmp_path):
+        """Tags should appear in the table, escaped, and only when present."""
+        stats = [
+            {
+                "package_name": "test-pkg",
+                "total": 1000,
+                "last_month": 300,
+                "last_week": 70,
+                "last_day": 10,
+            }
+        ]
+        output = tmp_path / "report.html"
+
+        generate_html_report(stats, str(output), tags={"test-pkg": ["<b>web", "api"]})
+        content = output.read_text()
+        assert "<th>Tags</th>" in content
+        assert "&lt;b&gt;web, api" in content
+        assert "<b>web" not in content
+
+        generate_html_report(stats, str(output), tags={"other-pkg": ["web"]})
+        assert "<th>Tags</th>" not in output.read_text()
+
+    def test_package_ci_states_reduces_workflows(self):
+        """Any failure wins; a pass needs every workflow to pass."""
+        rows = [
+            {"state": "PASS", "packages": ["failing", "passing", "running"]},
+            {"state": "FAIL", "packages": ["failing"]},
+            {"state": "RUNNING", "packages": ["running", "failing"]},
+            {"state": "FAIL", "packages": []},
+        ]
+        assert package_ci_states(rows) == {
+            "failing": "FAIL",
+            "passing": "PASS",
+            "running": "RUNNING",
+        }
+
+    def test_generate_html_report_ci_column(self, tmp_path):
+        """The CI column needs at least one row linked to a package."""
+        stats = [
+            {
+                "package_name": "test-pkg",
+                "total": 1000,
+                "last_month": 300,
+                "last_week": 70,
+                "last_day": 10,
+            }
+        ]
+        output = tmp_path / "report.html"
+        row = {"repo_key": "o/r", "workflow_name": "build", "state": "FAIL"}
+
+        generate_html_report(
+            stats, str(output), ci_status=[{**row, "packages": ["test-pkg"]}]
+        )
+        assert "<th>CI</th>" in output.read_text()
+
+        generate_html_report(stats, str(output), ci_status=[{**row, "packages": []}])
+        assert "<th>CI</th>" not in output.read_text()
 
     def test_generate_html_report_includes_all_packages(self):
         """generate_html_report should include all packages in the report."""

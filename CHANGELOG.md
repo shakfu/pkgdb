@@ -12,7 +12,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   - Read when a path is used, not at import. `default_db_file()`, `default_report_file()` and `default_packages_file()` replace the `DEFAULT_*` constants, which still resolve, through a module `__getattr__`, for code that imports them
 
+- `pkgdb backup [PATH]` and `pkgdb restore PATH`
+
+  - Tags, milestone marks, CI failure streaks and daily data past the pypistats window cannot be re-fetched. Backup uses SQLite's backup API over a file copy, so a concurrent write cannot produce a torn file. Restore checks the backup's integrity and keeps the current database as `<database>.pre-restore-<timestamp>`, so it needs no confirmation prompt
+
+- Tags in the HTML report and the dashboard: a column in each package table, and the dashboard filter matches tags. The report omits the column when no package is tagged, and `/api/packages` gains a `tags` field
+
+- Per-package CI status in the report (`report --ci`) and the dashboard, shown only once a scan exists. A package shows FAIL if any workflow fails and PASS only if all pass, because a running or unknown workflow does not establish a pass. `/api/packages` gains a `ci_state` field
+
+- Optional GitHub Pages publishing in `fetch-stats.yml.example`, enabled by a `PUBLISH_PAGES` repository variable. A workflow step was chosen over a `pkgdb publish` command, which would need credentials and git logic in the CLI
+
+### Changed
+
+- `pkgdb sync --prune` now only lists what it would remove; `--yes` removes it. A wrong username that owns other packages untracked everything not on its list, with no chance to review. A required flag was chosen over a removal cap, which needs an arbitrary threshold and still passes smaller mistakes. Scripts using `--prune` need `--yes`, and without it they exit 0 and remove nothing
+
+- `pkgdb sync` changes nothing when the account shares no packages with a non-empty tracked list, warns and exits 0. A wrong username added that account's packages even without `--prune`. `--force` overrides this, for moving to a new account
+
+- `pkgdb sync --prune --yes` backs up the database to `<database>.pre-prune-<timestamp>` before changing anything when there are packages to remove, and exits 1 without changes if the backup fails. Always on rather than a `--backup` flag, which is easy to forget
+
+- `pkgdb serve` binds to `127.0.0.1` by default. It bound every interface while logging a `localhost` URL, which exposed the unauthenticated dashboard to the network. `--host` overrides the default and warns when it goes beyond loopback
+
 ### Fixed
+
+- `fetch-stats.yml.example` now keeps its database between runs. The database went to `~/.pkgdb` on the runner, which is discarded after each job, so history and tags never accumulated and the committed `pkg.db` the file described did not exist. Its `git add -A` also committed `events.json`; it now stages named paths
+
+- `pkgdb sync --prune` no longer untracks everything when PyPI lists no packages. An empty listing removed every package and its tags, and a later `cleanup` purged the stats. An empty listing now skips pruning and warns, even with `--yes`
 
 - The test suite no longer writes to the real `~/.pkgdb`. The default paths were fixed at import, so the two `init` tests, which pass `-d` but not `-o`, overwrote `~/.pkgdb/report.html` on every run. A fixture now points `PKGDB_HOME` at a temporary directory for each test
 

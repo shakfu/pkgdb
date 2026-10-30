@@ -232,6 +232,23 @@ class TestApiEndpoints:
         assert "alpha-pkg" in names
         assert "beta-pkg" in names
 
+    def test_api_packages_includes_tags(self, populated_db, server_url):
+        PackageStatsService(populated_db).add_tag("alpha-pkg", "Web")
+        data = json.loads(urlopen(f"{server_url}/api/packages").read())
+        tags = {p["package_name"]: p["tags"] for p in data}
+        assert tags == {"alpha-pkg": ["web"], "beta-pkg": []}
+
+    def test_api_packages_includes_ci_state(self, populated_db, server_url):
+        from pkgdb.db import add_repo, link_package_repo, store_ci_status
+
+        with get_db(populated_db) as conn:
+            add_repo(conn, "o/r")
+            link_package_repo(conn, "alpha-pkg", "o/r")
+            store_ci_status(conn, "o/r", "build", "FAIL")
+        data = json.loads(urlopen(f"{server_url}/api/packages").read())
+        states = {p["package_name"]: p["ci_state"] for p in data}
+        assert states == {"alpha-pkg": "FAIL", "beta-pkg": None}
+
     def test_api_packages_has_growth_fields(self, server_url):
         resp = urlopen(f"{server_url}/api/packages")
         data = json.loads(resp.read())
@@ -448,5 +465,20 @@ class TestServeCli:
         with patch("pkgdb.server.start_server") as mock_start:
             cmd_serve(args)
             mock_start.assert_called_once_with(
-                db_path=populated_db, port=9999, open_browser=False
+                db_path=populated_db, port=9999, open_browser=False, host="127.0.0.1"
             )
+
+    def test_start_server_binds_loopback_by_default(self, populated_db):
+        """start_server should not listen on external interfaces by default."""
+        with patch("pkgdb.server.HTTPServer") as mock_server:
+            mock_server.return_value.serve_forever.side_effect = KeyboardInterrupt
+            start_server(populated_db, port=9999, open_browser=False)
+        assert mock_server.call_args.args[0] == ("127.0.0.1", 9999)
+
+    def test_start_server_warns_on_external_host(self, populated_db, caplog):
+        """Binding beyond loopback should warn that there is no authentication."""
+        with patch("pkgdb.server.HTTPServer") as mock_server:
+            mock_server.return_value.serve_forever.side_effect = KeyboardInterrupt
+            start_server(populated_db, port=9999, open_browser=False, host="0.0.0.0")
+        assert mock_server.call_args.args[0] == ("0.0.0.0", 9999)
+        assert "without authentication" in caplog.text

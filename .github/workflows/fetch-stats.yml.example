@@ -5,6 +5,7 @@
 # 2. Fetches download stats from PyPI
 # 3. Generates an HTML report
 # 4. Commits the updated database and report to the repo
+# 5. Publishes the report to GitHub Pages (optional)
 #
 # To use this workflow:
 # 1. Copy this file to .github/workflows/fetch-stats.yml (remove .example)
@@ -12,7 +13,13 @@
 # 3. Ensure the workflow has write permissions to your repo
 #
 # Note: The database (pkg.db) and report (report.html) will be committed
-# to your repository. Add them to .gitignore if you don't want this.
+# to your repository. The database must persist between runs, or history
+# and tags are lost; keep the repository private if pkg.db should not be public.
+#
+# To publish the report to GitHub Pages:
+# 1. Set Settings > Pages > Source to "GitHub Actions"
+# 2. Add a repository variable PUBLISH_PAGES with the value true
+# The published report is public, unless your plan offers private Pages.
 
 name: Fetch PyPI Stats
 
@@ -24,6 +31,10 @@ on:
 
 permissions:
   contents: write
+
+env:
+  # Keep pkg.db in the repository. The default, ~/.pkgdb, is discarded after each run.
+  PKGDB_HOME: ${{ github.workspace }}
 
 jobs:
   fetch-stats:
@@ -80,6 +91,34 @@ jobs:
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
-          git add -A
+          git add pkg.db report.html badges
           git diff --staged --quiet || git commit -m "Update PyPI download stats [skip ci]"
           git push
+
+      - name: Prepare report for GitHub Pages
+        if: vars.PUBLISH_PAGES == 'true'
+        run: |
+          mkdir -p _site
+          cp report.html _site/index.html
+
+      - name: Upload report for GitHub Pages
+        if: vars.PUBLISH_PAGES == 'true'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy-pages:
+    if: vars.PUBLISH_PAGES == 'true'
+    needs: fetch-stats
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

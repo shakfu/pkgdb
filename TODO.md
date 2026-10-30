@@ -6,32 +6,12 @@ Feature ideas for pkgdb, ordered by priority.
 
 ## High
 
+### GitHub Integration
+- [ ] Run `fetch-stats.yml.example` on GitHub - the Pages deploy and `git add` with an empty `badges` directory are untested
+
 ## Medium
 
-### Database Maintenance
-- [ ] Backup/restore - `pkgdb backup` / `pkgdb restore` #agent
-
-### Package Discovery
-- [ ] Import packages from pyproject.toml `[project]` section #agent
-
 ### GitHub Integration
-- [ ] Auto-discover packages from your repos (scan for pyproject.toml) - the `github_repos` registry added for `pkgdb ci` is the prerequisite #agent
-- [ ] Publish HTML report to GitHub Pages - `pkgdb publish`
-- [ ] Report CI failures as `pkgdb check` events, so one command covers downloads and CI #agent
-- [ ] CI status column in the HTML report and dashboard
-
-### Organization
-- [ ] Package groups/tags - group related packages, aggregate stats per group
+- [ ] Report new CI failures as opt-in `pkgdb check` events - a standing failure must not keep `check` exiting 1 #agent
 
 ## Low
-
-### Comparison Mode
-- [ ] Track packages you don't own (competitors, dependencies) #agent
-- [ ] Side-by-side comparison charts
-
-### Alerts
-- [ ] Detect significant spikes or drops in downloads
-- [ ] Milestones - set download targets, notify when reached
-
-### Advanced
-- [ ] Server/API mode - REST endpoint for dashboard integration

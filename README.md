@@ -20,7 +20,7 @@ It retrieves data through the pypistats and GitHub APIs, storing it as historica
 
 - **Anomaly and milestone alerts** (`check`) - weekly spike/drop detection and download-milestone crossings, exiting non-zero for shell/CI notifiers. Milestones measure downloads observed since tracking began and fire once each.
 
-- **Package tags / portfolio rollups** - group related packages and view aggregate download stats per group.
+- **Package tags / portfolio rollups** - group related packages, view aggregate download stats per group, and see tags in the report and dashboard.
 
 - **GitHub integration** - repository stats (stars, forks, activity, language), a daily metrics snapshot with star-growth tracking, and release history.
 
@@ -255,6 +255,9 @@ pkgdb serve
 # Serve on a custom port without opening browser
 pkgdb serve --port 3000 --no-browser
 
+# Expose the dashboard beyond this machine (no authentication)
+pkgdb serve --host 0.0.0.0
+
 # Fetch stats and generate report in one step
 # (skips packages already fetched in the last 24 hours)
 pkgdb update
@@ -273,11 +276,15 @@ pkgdb cleanup
 # Prune stats older than N days
 pkgdb cleanup --days 365
 
+# Back up and restore the database
+pkgdb backup
+pkgdb restore pkg.db.20261030-120000.bak
+
 # Sync packages from PyPI user account (initial or refresh)
 pkgdb sync --user <pypi-username>
 
 # Sync and remove packages no longer in user's PyPI account
-pkgdb sync --user <pypi-username> --prune
+pkgdb sync --user <pypi-username> --prune --yes
 
 # Show version
 pkgdb version
@@ -348,7 +355,7 @@ Modular CLI application with the following commands:
 
 - **import**: Import packages from file (JSON or text)
 
-- **sync**: Sync packages from a PyPI user account (with optional `--prune`)
+- **sync**: Sync packages from a PyPI user account (`--prune` lists packages no longer on the account; `--prune --yes` removes them)
 
 - **tag** / **untag** / **tags**: Group packages with tags and view per-group (portfolio) rollups
 
@@ -387,6 +394,10 @@ Modular CLI application with the following commands:
 
 **Maintenance:**
 - **cleanup**: Remove orphaned stats and optionally prune old data
+
+- **backup**: Write a consistent copy of the database
+
+- **restore**: Replace the database from a backup, keeping the current one beside it
 
 - **version**: Show pkgdb version
 
@@ -565,6 +576,8 @@ An example workflow is provided at `.github/workflows/fetch-stats.yml.example` f
 2. Configure your package list or PyPI username
 
 3. The workflow will fetch stats daily and commit updates to your repo
+
+4. Optionally, publish the report to GitHub Pages: set the Pages source to "GitHub Actions" and add a repository variable `PUBLISH_PAGES` set to `true`
 
 The example also runs `pkgdb check` each day so download spikes, drops, and milestone crossings show up automatically. Because `pkgdb fetch` backfills roughly 180 days of daily history on the first run, anomaly detection is useful immediately rather than only after weeks of collection. Drop the step's `|| true` to turn any detected event into a failed run (a red X and GitHub's usual failure notification), or pipe the JSON output to Slack, email, or an issue.
 

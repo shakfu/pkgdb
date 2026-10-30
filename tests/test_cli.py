@@ -865,7 +865,7 @@ class TestCLI:
 
         with patch(
             "sys.argv",
-            ["pkgdb", "-d", temp_db, "sync", "--user", "testuser", "--prune"],
+            ["pkgdb", "-d", temp_db, "sync", "--user", "testuser", "--prune", "--yes"],
         ):
             with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
                 mock_proxy.return_value.user_packages.return_value = mock_packages
@@ -880,6 +880,104 @@ class TestCLI:
         conn.close()
         assert "local-only-pkg" not in packages
         assert "common-pkg" in packages
+
+
+class TestSyncPruneConfirmation:
+    """--prune without --yes reports removals and makes none."""
+
+    def test_prune_without_yes_keeps_packages(self, temp_db, caplog):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "local-only-pkg")
+        add_package(conn, "common-pkg")
+        conn.close()
+
+        with patch(
+            "sys.argv",
+            ["pkgdb", "-d", temp_db, "sync", "--user", "testuser", "--prune"],
+        ):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = [
+                    ["Owner", "common-pkg"]
+                ]
+                main()
+
+        assert "Would prune 1 packages: local-only-pkg" in caplog.text
+        assert "--yes" in caplog.text
+        assert "Pruned" not in caplog.text
+        conn = get_db_connection(temp_db)
+        assert sorted(get_packages(conn)) == ["common-pkg", "local-only-pkg"]
+        conn.close()
+
+
+class TestSyncWrongUsername:
+    """No shared packages stops sync unless --force is given."""
+
+    def _sync(self, temp_db, *flags):
+        with patch(
+            "sys.argv", ["pkgdb", "-d", temp_db, "sync", "--user", "other", *flags]
+        ):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = [
+                    ["Owner", "theirs"]
+                ]
+                main()
+
+    def _setup(self, temp_db):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "mine")
+        conn.close()
+
+    def _packages(self, temp_db):
+        conn = get_db_connection(temp_db)
+        try:
+            return sorted(get_packages(conn))
+        finally:
+            conn.close()
+
+    def test_no_overlap_blocks_even_with_yes(self, temp_db, caplog):
+        self._setup(temp_db)
+        self._sync(temp_db, "--prune", "--yes")
+        assert "nothing changed" in caplog.text
+        assert self._packages(temp_db) == ["mine"]
+
+    def test_force_adds_without_pruning(self, temp_db):
+        self._setup(temp_db)
+        self._sync(temp_db, "--force")
+        assert self._packages(temp_db) == ["mine", "theirs"]
+
+    def test_failed_backup_exits_nonzero(self, temp_db, caplog):
+        self._setup(temp_db)
+        with patch("pkgdb.service.backup_database", side_effect=OSError("disk full")):
+            with pytest.raises(SystemExit) as exc:
+                self._sync(temp_db, "--force", "--prune", "--yes")
+        assert exc.value.code == 1
+        assert "nothing changed" in caplog.text
+        assert self._packages(temp_db) == ["mine"]
+
+
+class TestSyncPruneEmptyListing:
+    """An empty PyPI listing must not untrack everything."""
+
+    def test_empty_listing_does_not_prune(self, temp_db, caplog):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        add_package(conn, "keep-me")
+        conn.close()
+
+        with patch(
+            "sys.argv",
+            ["pkgdb", "-d", temp_db, "sync", "--user", "typo", "--prune", "--yes"],
+        ):
+            with patch("pkgdb.api.xmlrpc.client.ServerProxy") as mock_proxy:
+                mock_proxy.return_value.user_packages.return_value = []
+                main()
+
+        assert "skipped pruning 1" in caplog.text
+        conn = get_db_connection(temp_db)
+        assert get_packages(conn) == ["keep-me"]
+        conn.close()
 
 
 class TestCLINoVerifyFlag:

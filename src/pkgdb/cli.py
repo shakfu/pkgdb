@@ -3,6 +3,7 @@
 import argparse
 import json
 import logging
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -230,6 +231,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
         db_path=args.database,
         port=port,
         open_browser=not no_browser,
+        host=getattr(args, "host", "127.0.0.1"),
     )
 
 
@@ -775,20 +777,36 @@ def cmd_import(args: argparse.Namespace) -> None:
         logger.error("File not found: %s", args.file)
 
 
-def cmd_sync(args: argparse.Namespace) -> None:
+def cmd_sync(args: argparse.Namespace) -> int | None:
     """Sync command: refresh package list from PyPI user account."""
     username = args.user
     prune = getattr(args, "prune", False)
     logger.info("Syncing packages for PyPI user '%s'...", username)
 
     service = PackageStatsService(args.database)
-    result = service.sync_packages_from_user(username, prune=prune)
+    confirmed = getattr(args, "yes", False)
+    try:
+        result = service.sync_packages_from_user(
+            username, prune=prune and confirmed, force=getattr(args, "force", False)
+        )
+    except (OSError, sqlite3.Error, ValueError) as e:
+        logger.error("Backup before pruning failed, so nothing changed: %s", e)
+        return 1
 
     if result is None:
         logger.error(
             "Could not fetch packages for user '%s'. User may not exist.", username
         )
-        return
+        return None
+
+    if result.no_overlap:
+        logger.warning(
+            "'%s' owns none of your %d tracked packages, so nothing changed. "
+            "Check the username, or add --force if it is correct.",
+            username,
+            len(result.not_on_remote),
+        )
+        return None
 
     if result.added:
         logger.info(
@@ -796,6 +814,22 @@ def cmd_sync(args: argparse.Namespace) -> None:
         )
     else:
         logger.info("No new packages to add.")
+
+    if prune and result.not_on_remote and not (result.added or result.already_tracked):
+        logger.warning(
+            "PyPI listed no packages for '%s'; skipped pruning %d tracked packages.",
+            username,
+            len(result.not_on_remote),
+        )
+    elif prune and not confirmed and result.not_on_remote:
+        logger.warning(
+            "Would prune %d packages: %s. Add --yes to remove them.",
+            len(result.not_on_remote),
+            ", ".join(result.not_on_remote),
+        )
+
+    if result.backup:
+        logger.info("Backed up the database to %s", result.backup)
 
     if result.pruned:
         logger.info(
@@ -818,6 +852,7 @@ def cmd_sync(args: argparse.Namespace) -> None:
 
     total = len(result.added) + len(result.already_tracked)
     logger.info("Total packages from '%s': %d", username, total)
+    return None
 
 
 def cmd_history(args: argparse.Namespace) -> None:
@@ -1095,6 +1130,32 @@ def _format_deleted(counts: dict[str, int]) -> str:
     if not by_table:
         return "no rows"
     return ", ".join(f"{table}: {n:,}" for table, n in sorted(by_table.items()))
+
+
+def cmd_backup(args: argparse.Namespace) -> int:
+    """Backup command: write a consistent copy of the database."""
+    stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+    dest = args.path or f"{args.database}.{stamp}.bak"
+    try:
+        PackageStatsService(args.database).backup(dest, force=args.force)
+    except (OSError, sqlite3.Error, ValueError) as e:
+        logger.error("Backup failed: %s", e)
+        return 1
+    logger.info("Backed up %s to %s", args.database, dest)
+    return 0
+
+
+def cmd_restore(args: argparse.Namespace) -> int:
+    """Restore command: replace the database from a backup."""
+    try:
+        kept = PackageStatsService(args.database).restore(args.path)
+    except (OSError, sqlite3.Error, ValueError) as e:
+        logger.error("Restore failed: %s", e)
+        return 1
+    logger.info("Restored %s from %s", args.database, args.path)
+    if kept:
+        logger.info("Previous database kept at %s", kept)
+    return 0
 
 
 def cmd_cleanup(args: argparse.Namespace) -> None:
@@ -1769,7 +1830,18 @@ def create_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument(
         "--prune",
         action="store_true",
-        help="Remove locally tracked packages not in user's PyPI account",
+        help="List locally tracked packages not in user's PyPI account; "
+        "removes them only with --yes",
+    )
+    sync_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm that --prune should remove the packages it lists",
+    )
+    sync_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Proceed when the account shares no packages with the tracked list",
     )
     sync_parser.set_defaults(func=cmd_sync)
 
@@ -2090,6 +2162,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Port to serve on (default: 8080)",
     )
     serve_parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Interface to bind; the dashboard has no authentication (default: 127.0.0.1)",
+    )
+    serve_parser.add_argument(
         "--no-browser",
         action="store_true",
         help="Don't open browser automatically",
@@ -2113,6 +2190,31 @@ def create_parser() -> argparse.ArgumentParser:
         help="Output in JSON format",
     )
     cleanup_parser.set_defaults(func=cmd_cleanup)
+
+    # backup command
+    backup_parser = subparsers.add_parser(
+        "backup",
+        help="Write a consistent copy of the database",
+    )
+    backup_parser.add_argument(
+        "path",
+        nargs="?",
+        help="Backup file (default: <database>.<UTC timestamp>.bak)",
+    )
+    backup_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing backup file",
+    )
+    backup_parser.set_defaults(func=cmd_backup)
+
+    # restore command
+    restore_parser = subparsers.add_parser(
+        "restore",
+        help="Replace the database from a backup, keeping the current one beside it",
+    )
+    restore_parser.add_argument("path", help="Backup file to restore")
+    restore_parser.set_defaults(func=cmd_restore)
 
     # badge command
     badge_parser = subparsers.add_parser(

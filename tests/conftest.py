@@ -216,6 +216,9 @@ def temp_db():
         db_path = f.name
     yield db_path
     Path(db_path).unlink(missing_ok=True)
+    # Backups taken beside the database, such as by sync --prune.
+    for backup in Path(db_path).parent.glob(f"{Path(db_path).name}.*"):
+        backup.unlink()
 
 
 @pytest.fixture

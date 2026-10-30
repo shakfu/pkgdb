@@ -72,8 +72,13 @@ Sync package list from a PyPI user account.
 
 ```bash
 pkgdb sync --user shakfu
-pkgdb sync --user shakfu --prune    # remove packages no longer on PyPI
+pkgdb sync --user shakfu --prune    # list packages no longer on PyPI
+pkgdb sync --user shakfu --prune --yes  # remove them
 ```
+
+An account that shares no packages with your tracked list is treated as a wrong
+username, and nothing changes. Add `--force` if the account is correct. Removing
+packages first backs up the database to `<database>.pre-prune-<timestamp>`.
 
 ## Data Operations
 
@@ -330,6 +335,25 @@ Both operations span the whole schema, so the counts are reported per table -
 snapshots, the daily series, environment stats, and GitHub history each get
 their own figure alongside the total. `--json` exposes them as
 `orphaned_removed_by_table` and `pruned_by_table`.
+
+### `pkgdb backup`
+
+Write a consistent copy of the database. The default path is
+`<database>.<UTC timestamp>.bak`. An existing file is kept unless you pass `--force`.
+
+```bash
+pkgdb backup
+pkgdb backup ~/backups/pkg.db --force
+```
+
+### `pkgdb restore`
+
+Replace the database from a backup. A backup that fails its integrity check is
+rejected. The current database is kept as `<database>.pre-restore-<timestamp>`.
+
+```bash
+pkgdb restore ~/backups/pkg.db
+```
 
 ### `pkgdb version`
 
