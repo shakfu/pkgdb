@@ -3,10 +3,10 @@
 import json
 import logging
 import webbrowser
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
 from typing import Any
-from urllib.parse import unquote, urlparse, parse_qs
+from urllib.parse import parse_qs, unquote, urlparse
 
 from .reports import package_ci_states
 from .service import PackageStatsService
@@ -68,9 +68,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         # HTML pages
         from .dashboard import (
+            generate_comparison_page,
             generate_overview_page,
             generate_package_page,
-            generate_comparison_page,
         )
 
         if path == "/":

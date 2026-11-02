@@ -1,8 +1,22 @@
 """Tests for anomaly and milestone detection (pkgdb check)."""
 
+import sqlite3
 from datetime import datetime, timedelta
 
-from pkgdb import detect_anomaly, detect_milestones, weekly_totals
+from pkgdb import (
+    CI_STATE_FAIL,
+    CI_STATE_PASS,
+    CI_STATE_RUNNING,
+    detect_anomaly,
+    detect_milestones,
+    get_ci_status,
+    get_db_connection,
+    init_db,
+    store_ci_status,
+    weekly_totals,
+)
+from pkgdb.checks import detect_new_ci_failures
+from pkgdb.service import PackageStatsService
 
 
 def _series(daily_values, start="2026-01-05"):
@@ -112,3 +126,112 @@ class TestDetectMilestones:
     def test_none_totals(self):
         assert detect_milestones(None, 1000, [500]) == []
         assert detect_milestones(500, None, [500]) == []
+
+
+def _ci_row(**overrides):
+    row = {
+        "repo_key": "o/r",
+        "workflow_name": "build",
+        "state": CI_STATE_FAIL,
+        "run_url": "https://github.com/o/r/actions/runs/1",
+        "first_failed_at": "2026-10-01T00:00:00",
+        "notified_failed_at": None,
+    }
+    row.update(overrides)
+    return row
+
+
+class TestDetectNewCIFailures:
+    def test_unreported_failure_is_an_event(self):
+        [event] = detect_new_ci_failures([_ci_row()])
+        assert event["kind"] == "ci_failure"
+        assert event["package"] == "o/r"
+        assert event["workflow"] == "build"
+        assert event["first_failed_at"] == "2026-10-01T00:00:00"
+        assert event["run_url"] == "https://github.com/o/r/actions/runs/1"
+
+    def test_reported_streak_is_silent(self):
+        row = _ci_row(notified_failed_at="2026-10-01T00:00:00")
+        assert detect_new_ci_failures([row]) == []
+
+    def test_new_streak_after_reported_one_fires(self):
+        row = _ci_row(
+            first_failed_at="2026-10-20T00:00:00",
+            notified_failed_at="2026-10-01T00:00:00",
+        )
+        assert len(detect_new_ci_failures([row])) == 1
+
+    def test_non_failing_states_ignored(self):
+        rows = [
+            _ci_row(state=CI_STATE_PASS, first_failed_at=None),
+            # A running workflow keeps its streak but is not a failure now.
+            _ci_row(state=CI_STATE_RUNNING),
+        ]
+        assert detect_new_ci_failures(rows) == []
+
+
+class TestRunChecksCI:
+    """`run_checks(ci=True)` reports each failure streak exactly once."""
+
+    @staticmethod
+    def _record(temp_db, state, started=None, workflow="build"):
+        conn = get_db_connection(temp_db)
+        init_db(conn)
+        store_ci_status(conn, "o/r", workflow, state, run_started_at=started)
+        conn.close()
+
+    @staticmethod
+    def _ci_events(service):
+        return [e for e in service.run_checks(ci=True) if e["kind"] == "ci_failure"]
+
+    def test_opt_in(self, temp_db):
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-01T00:00:00")
+        service = PackageStatsService(temp_db)
+        assert service.run_checks() == []
+        # Not marked while disabled, so enabling it still reports the failure.
+        assert len(self._ci_events(service)) == 1
+
+    def test_standing_failure_reported_once(self, temp_db):
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-01T00:00:00")
+        service = PackageStatsService(temp_db)
+        assert len(self._ci_events(service)) == 1
+        # Later scans keep it failing; check must stay quiet.
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-02T00:00:00")
+        self._record(temp_db, CI_STATE_RUNNING)
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-03T00:00:00")
+        assert self._ci_events(service) == []
+
+    def test_break_after_fix_reported_again(self, temp_db):
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-01T00:00:00")
+        service = PackageStatsService(temp_db)
+        assert len(self._ci_events(service)) == 1
+        self._record(temp_db, CI_STATE_PASS)
+        assert self._ci_events(service) == []
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-20T00:00:00")
+        [event] = self._ci_events(service)
+        assert event["first_failed_at"] == "2026-10-20T00:00:00"
+
+    def test_scan_preserves_notified_marker(self, temp_db):
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-01T00:00:00")
+        PackageStatsService(temp_db).run_checks(ci=True)
+        self._record(temp_db, CI_STATE_FAIL, "2026-10-05T00:00:00")
+        conn = get_db_connection(temp_db)
+        [row] = get_ci_status(conn)
+        conn.close()
+        assert row["notified_failed_at"] == "2026-10-01T00:00:00"
+
+
+def test_init_db_adds_notified_column_to_old_table(temp_db):
+    conn = sqlite3.connect(temp_db)
+    conn.execute(
+        """CREATE TABLE github_ci_status (
+            repo_key TEXT NOT NULL, workflow_name TEXT NOT NULL,
+            state TEXT NOT NULL, branch TEXT, run_id INTEGER, run_url TEXT,
+            run_started_at TEXT, first_failed_at TEXT, checked_at TEXT NOT NULL,
+            PRIMARY KEY (repo_key, workflow_name))"""
+    )
+    conn.commit()
+    init_db(conn)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(github_ci_status)")}
+    conn.close()
+    assert "notified_failed_at" in columns

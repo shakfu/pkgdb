@@ -12,35 +12,35 @@ import pytest
 from conftest import mock_pypistats, track
 
 from pkgdb import (
-    get_db_connection,
-    get_db,
-    init_db,
+    PackageStatsService,
     add_package,
-    remove_package,
+    cleanup_orphaned_stats,
+    get_all_history,
+    get_daily_downloads,
+    get_database_stats,
+    get_db,
+    get_db_connection,
+    get_latest_stats,
+    get_next_update_seconds,
+    get_package_history,
     get_packages,
     get_packages_needing_update,
-    record_fetch_attempt,
     import_packages_from_file,
+    init_db,
     load_packages_from_file,
+    prune_old_stats,
+    record_fetch_attempt,
+    remove_package,
+    store_daily_downloads,
     store_stats,
     store_stats_batch,
-    store_daily_downloads,
-    get_daily_downloads,
-    get_latest_stats,
-    get_package_history,
-    get_all_history,
-    get_database_stats,
-    get_next_update_seconds,
-    cleanup_orphaned_stats,
-    prune_old_stats,
-    PackageStatsService,
 )
 from pkgdb.github import (
-    get_cached_repo_data,
-    store_cached_repo_data,
-    clear_github_cache,
-    get_github_cache_stats,
     _ensure_cache_table,
+    clear_github_cache,
+    get_cached_repo_data,
+    get_github_cache_stats,
+    store_cached_repo_data,
 )
 
 
@@ -514,7 +514,6 @@ class TestBatchStatsStorage:
 
     def test_service_fetch_uses_batch_commit(self, temp_db):
         """Service fetch_all_stats should use batch commits."""
-        from unittest.mock import patch
 
         service = PackageStatsService(temp_db)
         service.add_package("pkg-a", verify=False)
@@ -645,7 +644,6 @@ class TestFetchAttemptTracking:
 
     def test_service_fetch_skips_recent_packages(self, temp_db):
         """Service fetch_all_stats should skip recently fetched packages."""
-        from unittest.mock import patch
 
         service = PackageStatsService(temp_db)
         service.add_package("pkg-a", verify=False)
@@ -847,7 +845,6 @@ def _record_attempt_at(conn, package_name: str, modifier: str) -> None:
 
     def test_fetch_result_includes_next_update(self, temp_db):
         """FetchResult should include next_update_seconds when all packages are skipped."""
-        from unittest.mock import patch
 
         service = PackageStatsService(temp_db)
         service.add_package("pkg-a", verify=False)
@@ -876,7 +873,7 @@ class TestEnvStatsCache:
 
     def test_store_and_retrieve_python_versions(self, temp_db):
         """store_env_stats should persist Python version data retrievable by get_cached_python_versions."""
-        from pkgdb import store_env_stats, get_cached_python_versions
+        from pkgdb import get_cached_python_versions, store_env_stats
 
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -900,7 +897,7 @@ class TestEnvStatsCache:
 
     def test_store_and_retrieve_os_stats(self, temp_db):
         """store_env_stats should persist OS data retrievable by get_cached_os_stats."""
-        from pkgdb import store_env_stats, get_cached_os_stats
+        from pkgdb import get_cached_os_stats, store_env_stats
 
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -922,7 +919,7 @@ class TestEnvStatsCache:
 
     def test_cached_returns_none_when_empty(self, temp_db):
         """get_cached_* should return None when no data exists."""
-        from pkgdb import get_cached_python_versions, get_cached_os_stats
+        from pkgdb import get_cached_os_stats, get_cached_python_versions
 
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -934,9 +931,9 @@ class TestEnvStatsCache:
     def test_store_env_stats_none_inputs(self, temp_db):
         """store_env_stats should handle None inputs gracefully."""
         from pkgdb import (
-            store_env_stats,
-            get_cached_python_versions,
             get_cached_os_stats,
+            get_cached_python_versions,
+            store_env_stats,
         )
 
         conn = get_db_connection(temp_db)
@@ -951,7 +948,7 @@ class TestEnvStatsCache:
 
     def test_get_cached_env_summary_aggregates(self, temp_db):
         """get_cached_env_summary should aggregate across all packages."""
-        from pkgdb import store_env_stats, get_cached_env_summary
+        from pkgdb import get_cached_env_summary, store_env_stats
 
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -1002,9 +999,9 @@ class TestEnvStatsCache:
     def test_cleanup_orphaned_stats_cleans_env_tables(self, temp_db):
         """cleanup_orphaned_stats should also remove orphaned env stats."""
         from pkgdb import (
-            store_env_stats,
-            get_cached_python_versions,
             cleanup_orphaned_stats,
+            get_cached_python_versions,
+            store_env_stats,
         )
 
         conn = get_db_connection(temp_db)
@@ -1031,7 +1028,7 @@ class TestEnvStatsCache:
 
     def test_prune_old_stats_prunes_env_tables(self, temp_db):
         """prune_old_stats should also remove old env stats."""
-        from pkgdb import store_env_stats, get_cached_python_versions, prune_old_stats
+        from pkgdb import get_cached_python_versions, prune_old_stats, store_env_stats
 
         conn = get_db_connection(temp_db)
         init_db(conn)
@@ -1058,7 +1055,8 @@ class TestEnvStatsCache:
     def test_fetch_all_stats_stores_env_data(self, temp_db):
         """fetch_all_stats should store env stats alongside download stats."""
         from unittest.mock import patch
-        from pkgdb import get_cached_python_versions, get_cached_os_stats
+
+        from pkgdb import get_cached_os_stats, get_cached_python_versions
 
         service = PackageStatsService(temp_db)
         service.add_package("test-pkg", verify=False)
@@ -1072,13 +1070,13 @@ class TestEnvStatsCache:
         py_response = json.dumps({"data": [{"category": "3.12", "downloads": 100}]})
         os_response = json.dumps({"data": [{"category": "Linux", "downloads": 200}]})
 
-        with patch("pkgdb.api.pypistats.recent", return_value=recent):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall):
-                with patch(
-                    "pkgdb.api.pypistats.python_minor", return_value=py_response
-                ):
-                    with patch("pkgdb.api.pypistats.system", return_value=os_response):
-                        result = service.fetch_all_stats()
+        with (
+            patch("pkgdb.api.pypistats.recent", return_value=recent),
+            patch("pkgdb.api.pypistats.overall", return_value=overall),
+            patch("pkgdb.api.pypistats.python_minor", return_value=py_response),
+            patch("pkgdb.api.pypistats.system", return_value=os_response),
+        ):
+            result = service.fetch_all_stats()
 
         assert result.success == 1
 
@@ -1094,9 +1092,7 @@ class TestEnvStatsCache:
 
     def test_package_report_uses_cached_env(self, temp_db):
         """generate_package_report should use cached env data instead of live API."""
-        import os
         from unittest.mock import patch
-        from pkgdb import store_env_stats
 
         service = PackageStatsService(temp_db)
         service.add_package("test-pkg", verify=False)
@@ -1111,13 +1107,13 @@ class TestEnvStatsCache:
         py_response = json.dumps({"data": [{"category": "3.12", "downloads": 100}]})
         os_response = json.dumps({"data": [{"category": "Linux", "downloads": 200}]})
 
-        with patch("pkgdb.api.pypistats.recent", return_value=recent):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall):
-                with patch(
-                    "pkgdb.api.pypistats.python_minor", return_value=py_response
-                ):
-                    with patch("pkgdb.api.pypistats.system", return_value=os_response):
-                        service.fetch_all_stats()
+        with (
+            patch("pkgdb.api.pypistats.recent", return_value=recent),
+            patch("pkgdb.api.pypistats.overall", return_value=overall),
+            patch("pkgdb.api.pypistats.python_minor", return_value=py_response),
+            patch("pkgdb.api.pypistats.system", return_value=os_response),
+        ):
+            service.fetch_all_stats()
 
         # Generate report -- should NOT call python_minor or system APIs
         import tempfile
@@ -1222,6 +1218,7 @@ class TestDatabaseInfo:
     def test_cmd_show_with_info_flag(self, temp_db, capsys):
         """cmd_show with --info should display database info."""
         from unittest.mock import patch
+
         from pkgdb import main
 
         service = PackageStatsService(temp_db)
@@ -1473,7 +1470,7 @@ class TestDailyDownloads:
 
     def test_growth_prefers_daily_series(self, db_conn):
         """get_stats_with_growth should compute exact growth from daily data."""
-        from pkgdb import store_stats, get_stats_with_growth
+        from pkgdb import get_stats_with_growth, store_stats
 
         add_package(db_conn, "pkg")
         # A single snapshot so the package appears in latest stats.
@@ -1539,7 +1536,7 @@ class TestPackageTags:
         assert add_package_tag(db_conn, "pkg", "   ") is False  # empty
 
     def test_remove_tag(self, db_conn):
-        from pkgdb import add_package_tag, remove_package_tag, get_package_tags
+        from pkgdb import add_package_tag, get_package_tags, remove_package_tag
 
         add_package(db_conn, "pkg")
         add_package_tag(db_conn, "pkg", "web")
@@ -1594,7 +1591,7 @@ class TestGithubStatsHistory:
         conn.close()
 
     def test_store_and_get(self, db_conn):
-        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+        from pkgdb import get_github_stats_history, store_github_stats_snapshot
 
         add_package(db_conn, "pkg")
         store_github_stats_snapshot(db_conn, "pkg", "o/r", 100, 10, 3, 20)
@@ -1606,7 +1603,7 @@ class TestGithubStatsHistory:
         assert rows[0]["watchers"] == 20
 
     def test_same_day_upsert(self, db_conn):
-        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+        from pkgdb import get_github_stats_history, store_github_stats_snapshot
 
         add_package(db_conn, "pkg")
         store_github_stats_snapshot(db_conn, "pkg", "o/r", 100, 10, 3, 20)
@@ -1633,7 +1630,7 @@ class TestGithubStatsHistory:
         assert [r["date"] for r in rows] == ["2026-06-05", "2026-06-10"]
 
     def test_cleanup_orphaned_removes_history(self, db_conn):
-        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+        from pkgdb import get_github_stats_history, store_github_stats_snapshot
 
         add_package(db_conn, "tracked")
         store_github_stats_snapshot(db_conn, "tracked", "o/r", 1, 1, 1, 1)
@@ -1643,7 +1640,7 @@ class TestGithubStatsHistory:
         assert get_github_stats_history(db_conn, "orphan") == []
 
     def test_store_and_get_issues_excluding_prs(self, db_conn):
-        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+        from pkgdb import get_github_stats_history, store_github_stats_snapshot
 
         add_package(db_conn, "pkg")
         store_github_stats_snapshot(
@@ -1655,7 +1652,7 @@ class TestGithubStatsHistory:
 
     def test_issues_excluding_prs_defaults_to_unknown(self, db_conn):
         """An unavailable count is recorded as NULL, not as zero."""
-        from pkgdb import store_github_stats_snapshot, get_github_stats_history
+        from pkgdb import get_github_stats_history, store_github_stats_snapshot
 
         add_package(db_conn, "pkg")
         store_github_stats_snapshot(db_conn, "pkg", "o/r", 100, 10, 9, 20)
@@ -1712,6 +1709,7 @@ class TestGithubStatsHistory:
 
     def test_prune_removes_old_history(self, db_conn):
         from datetime import datetime
+
         from pkgdb import get_github_stats_history
 
         today = datetime.now().strftime("%Y-%m-%d")

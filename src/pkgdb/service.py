@@ -3,11 +3,12 @@
 import fnmatch
 import sqlite3
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .api import (
     aggregate_env_stats,
@@ -19,61 +20,6 @@ from .api import (
     fetch_python_versions,
     fetch_user_packages,
 )
-from .db import (
-    REPO_SOURCE_DISCOVER,
-    REPO_SOURCE_MANUAL,
-    REPO_SOURCE_PACKAGE,
-    add_package,
-    add_package_tag,
-    backup_database,
-    add_repo,
-    cleanup_orphaned_stats,
-    get_ci_status,
-    get_repo_packages,
-    get_repos,
-    link_package_repo,
-    normalize_repo_key,
-    prune_ci_status,
-    remove_repo,
-    seed_repos_from_cache,
-    set_repo_enabled,
-    store_ci_status,
-    get_all_history,
-    get_all_github_releases,
-    get_all_pypi_releases,
-    get_database_stats,
-    get_db,
-    get_github_releases,
-    get_latest_stats,
-    get_package_history,
-    get_package_tags,
-    get_packages,
-    get_packages_for_tag,
-    get_cached_env_summary,
-    get_cached_os_stats,
-    get_cached_python_versions,
-    get_daily_downloads,
-    get_github_stats_history,
-    get_milestone_high_water,
-    get_next_update_seconds,
-    get_packages_needing_update,
-    set_milestone_high_water,
-    get_pypi_releases,
-    get_tags_by_package,
-    get_tags_map,
-    store_daily_downloads,
-    store_env_stats,
-    store_github_releases,
-    store_github_stats_snapshot,
-    store_pypi_releases,
-    get_stats_with_growth,
-    prune_old_stats,
-    record_fetch_attempt,
-    remove_package,
-    remove_package_tag,
-    restore_database,
-    store_stats,
-)
 from .badges import generate_downloads_badge
 from .checks import (
     DEFAULT_BASELINE_WEEKS,
@@ -81,6 +27,63 @@ from .checks import (
     DEFAULT_Z_THRESHOLD,
     detect_anomaly,
     detect_milestones,
+    detect_new_ci_failures,
+)
+from .db import (
+    REPO_SOURCE_DISCOVER,
+    REPO_SOURCE_MANUAL,
+    REPO_SOURCE_PACKAGE,
+    add_package,
+    add_package_tag,
+    add_repo,
+    backup_database,
+    cleanup_orphaned_stats,
+    get_all_github_releases,
+    get_all_history,
+    get_all_pypi_releases,
+    get_cached_env_summary,
+    get_cached_os_stats,
+    get_cached_python_versions,
+    get_ci_status,
+    get_daily_downloads,
+    get_database_stats,
+    get_db,
+    get_github_releases,
+    get_github_stats_history,
+    get_latest_stats,
+    get_milestone_high_water,
+    get_next_update_seconds,
+    get_package_history,
+    get_package_tags,
+    get_packages,
+    get_packages_for_tag,
+    get_packages_needing_update,
+    get_pypi_releases,
+    get_repo_packages,
+    get_repos,
+    get_stats_with_growth,
+    get_tags_by_package,
+    get_tags_map,
+    link_package_repo,
+    mark_ci_failure_notified,
+    normalize_repo_key,
+    prune_ci_status,
+    prune_old_stats,
+    record_fetch_attempt,
+    remove_package,
+    remove_package_tag,
+    remove_repo,
+    restore_database,
+    seed_repos_from_cache,
+    set_milestone_high_water,
+    set_repo_enabled,
+    store_ci_status,
+    store_daily_downloads,
+    store_env_stats,
+    store_github_releases,
+    store_github_stats_snapshot,
+    store_pypi_releases,
+    store_stats,
 )
 from .export import export_csv, export_json, export_markdown
 from .github import (
@@ -736,6 +739,7 @@ class PackageStatsService:
         baseline_weeks: int = DEFAULT_BASELINE_WEEKS,
         z_threshold: float = DEFAULT_Z_THRESHOLD,
         min_weekly: float = DEFAULT_MIN_WEEKLY,
+        ci: bool = False,
     ) -> list[CheckEvent]:
         """Scan tracked packages for download anomalies and milestone crossings.
 
@@ -757,6 +761,8 @@ class PackageStatsService:
             baseline_weeks: Number of prior weeks used as the anomaly baseline.
             z_threshold: Standard deviations from baseline to flag an anomaly.
             min_weekly: Skip packages averaging fewer weekly downloads than this.
+            ci: Also report each CI failure streak from the last recorded scan,
+                once. Reads stored state; it never scans.
         """
         milestones = milestones or []
         events: list[CheckEvent] = []
@@ -802,6 +808,18 @@ class PackageStatsService:
                                 }
                             )
                         set_milestone_high_water(conn, package, current)
+
+            if ci:
+                for event in detect_new_ci_failures(get_ci_status(conn)):
+                    events.append(event)
+                    mark_ci_failure_notified(
+                        conn,
+                        event["repo"],
+                        event["workflow"],
+                        event["first_failed_at"],
+                        commit=False,
+                    )
+                conn.commit()
 
         events.sort(key=lambda e: (e["package"], e["kind"]))
         return events

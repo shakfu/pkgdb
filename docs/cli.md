@@ -136,11 +136,19 @@ past a threshold is not reported as a crossing, and a total that dips (through
 pruning, or through the rolling-window fallback used by databases predating the
 daily series) cannot announce the same milestone a second time.
 
+With `--ci` (or `ci = true` under `[check]`), `check` also reports each new CI
+failure from the last recorded scan. It reads stored state and never scans, so
+run `pkgdb ci` or `pkgdb update --ci` first. Each failure streak is reported
+once: a workflow that stays red does not keep `check` exiting 1, and only a pass
+followed by a new failure reports it again. Turning the option on reports every
+standing failure once.
+
 ```bash
 pkgdb check                         # report events; exit 1 if any found
 pkgdb check --json                  # machine-readable events
 pkgdb check --milestone 100000      # watch a download target (repeatable)
 pkgdb check -z 3.0                  # require a larger deviation to flag
+pkgdb check --ci                    # also report new CI failures
 pkgdb check --exit-zero             # report but always exit 0
 ```
 

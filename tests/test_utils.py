@@ -6,16 +6,16 @@ import tempfile
 import pytest
 
 from pkgdb import (
-    get_db_connection,
-    init_db,
+    PackageStatsService,
     add_package,
     calculate_growth,
     daily_window_sums,
+    get_db_connection,
+    init_db,
     make_sparkline,
-    validate_package_name,
-    validate_output_path,
     parse_date_arg,
-    PackageStatsService,
+    validate_output_path,
+    validate_package_name,
 )
 
 
@@ -77,6 +77,7 @@ class TestGrowthCalculation:
     def test_get_stats_with_growth_uses_weekly_column(self, temp_db):
         """week_growth should be computed from last_week, not last_month."""
         from datetime import datetime, timedelta
+
         from pkgdb.db import get_stats_with_growth
 
         conn = get_db_connection(temp_db)
@@ -168,21 +169,21 @@ class TestPackageNameValidation:
         """Package names starting with non-alphanumeric should fail."""
         invalid_names = ["-package", "_package", ".package"]
         for name in invalid_names:
-            is_valid, error = validate_package_name(name)
+            is_valid, _error = validate_package_name(name)
             assert not is_valid, f"'{name}' should be invalid"
 
     def test_package_name_invalid_end(self):
         """Package names ending with non-alphanumeric should fail."""
         invalid_names = ["package-", "package_", "package."]
         for name in invalid_names:
-            is_valid, error = validate_package_name(name)
+            is_valid, _error = validate_package_name(name)
             assert not is_valid, f"'{name}' should be invalid"
 
     def test_package_name_invalid_chars(self):
         """Package names with invalid characters should fail."""
         invalid_names = ["my package", "my@package", "my!pkg", "my/pkg"]
         for name in invalid_names:
-            is_valid, error = validate_package_name(name)
+            is_valid, _error = validate_package_name(name)
             assert not is_valid, f"'{name}' should be invalid"
 
     def test_service_add_invalid_package_raises(self, temp_db):
@@ -346,7 +347,7 @@ class TestOutputPathValidation:
             # if it's writable, but the path is normalized
             path = os.path.join(tmpdir, "..", "output.html")
             # The validation should resolve the path
-            is_valid, error = validate_output_path(path)
+            is_valid, _error = validate_output_path(path)
             # May or may not be valid depending on parent permissions
             # The key is that .. is resolved
             assert isinstance(is_valid, bool)
@@ -355,7 +356,7 @@ class TestOutputPathValidation:
         """Non-writable parent should fail when must_be_writable=True."""
         # /usr should not be writable for normal users
         if os.name != "nt" and not os.access("/usr", os.W_OK):
-            is_valid, error = validate_output_path(
+            is_valid, _error = validate_output_path(
                 "/usr/output.html", must_be_writable=True
             )
             assert not is_valid

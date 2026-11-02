@@ -34,7 +34,6 @@ from pkgdb import (
 )
 from pkgdb.cli import _humanize_age, create_parser, main
 from pkgdb.github import (
-    WorkflowRun,
     fetch_default_branch,
     fetch_user_repos,
     fetch_workflow_count,
@@ -338,9 +337,11 @@ class TestFetchUserRepos:
                 "archived": True,
             },
         ]
-        with self._anonymous():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                repos = fetch_user_repos("u")
+        with (
+            self._anonymous(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+        ):
+            repos = fetch_user_repos("u")
         assert [r["full_name"] for r in repos] == ["u/a"]
 
     def test_include_flags(self):
@@ -348,25 +349,29 @@ class TestFetchUserRepos:
             {"full_name": "u/a", "fork": True, "archived": False},
             {"full_name": "u/b", "fork": False, "archived": True},
         ]
-        with self._anonymous():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                repos = fetch_user_repos("u", include_forks=True, include_archived=True)
+        with (
+            self._anonymous(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+        ):
+            repos = fetch_user_repos("u", include_forks=True, include_archived=True)
         assert len(repos) == 2
 
     def test_error_is_none(self):
         from urllib.error import URLError
 
-        with self._anonymous():
-            with patch("pkgdb.github.urlopen", side_effect=URLError("boom")):
-                assert fetch_user_repos("u") is None
+        with (
+            self._anonymous(),
+            patch("pkgdb.github.urlopen", side_effect=URLError("boom")),
+        ):
+            assert fetch_user_repos("u") is None
 
     def test_stops_on_short_page(self):
         payload = [{"full_name": "u/a", "fork": False, "archived": False}]
-        with self._anonymous():
-            with patch(
-                "pkgdb.github.urlopen", return_value=_json_response(payload)
-            ) as mock:
-                fetch_user_repos("u")
+        with (
+            self._anonymous(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)) as mock,
+        ):
+            fetch_user_repos("u")
         assert mock.call_count == 1
 
     def test_own_account_uses_the_authenticated_endpoint(self):
@@ -386,9 +391,11 @@ class TestFetchUserRepos:
             captured.append(req.full_url)
             return _json_response(payload)
 
-        with patch("pkgdb.github.fetch_authenticated_login", return_value="u"):
-            with patch("pkgdb.github.urlopen", side_effect=capture):
-                repos = fetch_user_repos("u")
+        with (
+            patch("pkgdb.github.fetch_authenticated_login", return_value="u"),
+            patch("pkgdb.github.urlopen", side_effect=capture),
+        ):
+            repos = fetch_user_repos("u")
         assert captured[0].endswith(
             "/user/repos?per_page=100&page=1&affiliation=owner&sort=full_name"
         )
@@ -402,19 +409,21 @@ class TestFetchUserRepos:
             captured.append(req.full_url)
             return _json_response(payload)
 
-        with patch("pkgdb.github.fetch_authenticated_login", return_value="u"):
-            with patch("pkgdb.github.urlopen", side_effect=capture):
-                fetch_user_repos("other")
+        with (
+            patch("pkgdb.github.fetch_authenticated_login", return_value="u"),
+            patch("pkgdb.github.urlopen", side_effect=capture),
+        ):
+            fetch_user_repos("other")
         assert "/users/other/repos" in captured[0]
 
     def test_login_lookup_is_skipped_without_a_token(self):
         from pkgdb.github import fetch_authenticated_login
 
-        with self._anonymous():
-            with patch(
-                "pkgdb.github.urlopen", side_effect=AssertionError("no request")
-            ):
-                assert fetch_authenticated_login() is None
+        with (
+            self._anonymous(),
+            patch("pkgdb.github.urlopen", side_effect=AssertionError("no request")),
+        ):
+            assert fetch_authenticated_login() is None
 
 
 class TestNormalizeRepoKey:
@@ -799,9 +808,11 @@ class TestServiceDiscoverRepos:
                 "archived": False,
             },
         ]
-        with patch("pkgdb.service.fetch_user_repos", return_value=listing):
-            with patch("pkgdb.service.fetch_workflow_count", side_effect=[2, 0]):
-                summary = service.discover_repos("u")
+        with (
+            patch("pkgdb.service.fetch_user_repos", return_value=listing),
+            patch("pkgdb.service.fetch_workflow_count", side_effect=[2, 0]),
+        ):
+            summary = service.discover_repos("u")
         assert summary["found"] == 2
         assert summary["added"] == 2
         assert summary["with_workflows"] == 1
@@ -813,21 +824,25 @@ class TestServiceDiscoverRepos:
     def test_no_probe_leaves_counts_unknown(self, temp_db):
         service = PackageStatsService(temp_db)
         listing = [{"full_name": "u/a", "default_branch": "main"}]
-        with patch("pkgdb.service.fetch_user_repos", return_value=listing):
-            with patch(
+        with (
+            patch("pkgdb.service.fetch_user_repos", return_value=listing),
+            patch(
                 "pkgdb.service.fetch_workflow_count",
                 side_effect=AssertionError("probed"),
-            ):
-                service.discover_repos("u", probe_workflows=False)
+            ),
+        ):
+            service.discover_repos("u", probe_workflows=False)
         assert service.list_repos()[0]["has_workflows"] is None
 
     def test_known_counts_are_not_reprobed(self, temp_db):
         service = PackageStatsService(temp_db)
         listing = [{"full_name": "u/a", "default_branch": "main"}]
-        with patch("pkgdb.service.fetch_user_repos", return_value=listing):
-            with patch("pkgdb.service.fetch_workflow_count", return_value=3) as probe:
-                service.discover_repos("u")
-                service.discover_repos("u")
+        with (
+            patch("pkgdb.service.fetch_user_repos", return_value=listing),
+            patch("pkgdb.service.fetch_workflow_count", return_value=3) as probe,
+        ):
+            service.discover_repos("u")
+            service.discover_repos("u")
         assert probe.call_count == 1
 
     def test_links_packages_by_name(self, temp_db):
@@ -839,9 +854,11 @@ class TestServiceDiscoverRepos:
             add_package(conn, pkg)
         conn.close()
         listing = [{"full_name": "u/py2max-server", "default_branch": "main"}]
-        with patch("pkgdb.service.fetch_user_repos", return_value=listing):
-            with patch("pkgdb.service.fetch_workflow_count", return_value=1):
-                summary = service.discover_repos("u")
+        with (
+            patch("pkgdb.service.fetch_user_repos", return_value=listing),
+            patch("pkgdb.service.fetch_workflow_count", return_value=1),
+        ):
+            summary = service.discover_repos("u")
         assert summary["linked"] == 1
         assert service.list_repos()[0]["packages"] == ["py2max_server"]
 
@@ -861,10 +878,13 @@ class TestCICommand:
     def test_failures_exit_nonzero(self, temp_db, capsys):
         payload = {"workflow_runs": [_run(name="build", conclusion="failure")]}
         argv = ["pkgdb", "-d", temp_db, "ci", "--repo", "o/r", "--branch", "main"]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                with pytest.raises(SystemExit) as exc:
-                    main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+            pytest.raises(SystemExit) as exc,
+        ):
+            main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "o/r" in out and "build" in out and "FAIL" in out
@@ -872,9 +892,12 @@ class TestCICommand:
     def test_green_exits_zero(self, temp_db):
         payload = {"workflow_runs": [_run()]}
         argv = ["pkgdb", "-d", temp_db, "ci", "--repo", "o/r", "--branch", "main"]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                main()  # must not raise
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+        ):
+            main()  # must not raise
 
     def test_exit_zero_flag(self, temp_db):
         payload = {"workflow_runs": [_run(conclusion="failure")]}
@@ -889,9 +912,12 @@ class TestCICommand:
             "main",
             "--exit-zero",
         ]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                main()  # must not raise
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+        ):
+            main()  # must not raise
 
     def test_passing_workflows_are_hidden_by_default(self, temp_db, capsys):
         payload = {
@@ -901,10 +927,13 @@ class TestCICommand:
             ]
         }
         argv = ["pkgdb", "-d", temp_db, "ci", "--repo", "o/r", "--branch", "main"]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                with pytest.raises(SystemExit):
-                    main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+            pytest.raises(SystemExit),
+        ):
+            main()
         out = capsys.readouterr().out
         assert "build" in out
         assert "docs" not in out
@@ -922,9 +951,12 @@ class TestCICommand:
             "main",
             "--all",
         ]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+        ):
+            main()
         assert "docs" in capsys.readouterr().out
 
     def test_json_output(self, temp_db, capsys):
@@ -940,10 +972,13 @@ class TestCICommand:
             "main",
             "--json",
         ]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                with pytest.raises(SystemExit):
-                    main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+            pytest.raises(SystemExit),
+        ):
+            main()
         data = json.loads(capsys.readouterr().out)
         assert data[0]["repo"] == "o/r"
         assert data[0]["workflows"][0]["state"] == CI_STATE_FAIL
@@ -962,46 +997,63 @@ class TestRepoCommand:
         assert args.repo_command == "add"
 
     def test_add_and_list(self, temp_db, capsys):
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "add", "o/r"]):
-            with _no_config():
-                main()
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "list"]):
-            with _no_config():
-                main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "add", "o/r"]),
+            _no_config(),
+        ):
+            main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "list"]),
+            _no_config(),
+        ):
+            main()
         assert "o/r" in capsys.readouterr().out
 
     def test_remove(self, temp_db, caplog):
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "add", "o/r"]):
-            with _no_config():
-                main()
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "remove", "o/r"]):
-            with _no_config():
-                main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "add", "o/r"]),
+            _no_config(),
+        ):
+            main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "remove", "o/r"]),
+            _no_config(),
+        ):
+            main()
         assert "Removed o/r" in caplog.text
 
     def test_list_json(self, temp_db, capsys):
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "add", "o/r"]):
-            with _no_config():
-                main()
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "--json", "list"]):
-            with _no_config():
-                main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "add", "o/r"]),
+            _no_config(),
+        ):
+            main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "--json", "list"]),
+            _no_config(),
+        ):
+            main()
         data = json.loads(capsys.readouterr().out)
         assert data[0]["repo_key"] == "o/r"
 
     def test_discover_requires_a_user(self, temp_db, caplog):
-        with patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "discover"]):
-            with _no_config():
-                main()
+        with (
+            patch("sys.argv", ["pkgdb", "-d", temp_db, "repo", "discover"]),
+            _no_config(),
+        ):
+            main()
         assert "No GitHub user given" in caplog.text
 
     def test_discover(self, temp_db, caplog):
         listing = [{"full_name": "u/a", "default_branch": "main"}]
         argv = ["pkgdb", "-d", temp_db, "repo", "discover", "--user", "u"]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.service.fetch_user_repos", return_value=listing):
-                with patch("pkgdb.service.fetch_workflow_count", return_value=1):
-                    main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.service.fetch_user_repos", return_value=listing),
+            patch("pkgdb.service.fetch_workflow_count", return_value=1),
+        ):
+            main()
         assert "Found 1 repositories" in caplog.text
 
 
@@ -1184,18 +1236,24 @@ class TestCIHtmlReport:
             str(out),
             "--no-browser",
         ]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                with pytest.raises(SystemExit):
-                    main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+            pytest.raises(SystemExit),
+        ):
+            main()
         assert "build" in out.read_text()
 
     def test_ci_command_does_not_write_by_default(self, temp_db, tmp_path):
         payload = {"workflow_runs": [_run()]}
         argv = ["pkgdb", "-d", temp_db, "ci", "--repo", "o/r", "--branch", "main"]
-        with patch("sys.argv", argv), _no_config():
-            with patch("pkgdb.github.urlopen", return_value=_json_response(payload)):
-                main()
+        with (
+            patch("sys.argv", argv),
+            _no_config(),
+            patch("pkgdb.github.urlopen", return_value=_json_response(payload)),
+        ):
+            main()
         assert list(tmp_path.iterdir()) == []
 
 

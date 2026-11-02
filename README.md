@@ -99,6 +99,7 @@ sort_by = "total"       # default sort order (total, month, week, day, growth, n
 # baseline_weeks = 8    # weeks of history used as the anomaly baseline
 # z_threshold = 2.5     # std-devs from baseline to flag a spike/drop
 # min_weekly = 10       # ignore packages averaging fewer weekly downloads
+# ci = true             # also report new CI failures (same as --ci)
 
 [github]
 # user = "myusername"   # default GitHub user for 'repo discover'

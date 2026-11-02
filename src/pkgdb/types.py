@@ -98,8 +98,9 @@ class CheckEvent(TypedDict, total=False):
     """A noteworthy event surfaced by ``pkgdb check``.
 
     ``package``, ``kind`` and ``message`` are always present. ``kind`` is one of
-    ``"spike"``, ``"drop"`` or ``"milestone"``. The remaining fields carry the
-    supporting numbers for whichever kind of event this is.
+    ``"spike"``, ``"drop"``, ``"milestone"`` or ``"ci_failure"``. For
+    ``ci_failure``, ``package`` holds the repository key. The remaining fields
+    carry the supporting data for whichever kind of event this is.
     """
 
     package: str
@@ -114,6 +115,11 @@ class CheckEvent(TypedDict, total=False):
     # Milestone field (kind: milestone)
     milestone: int
     total: int
+    # CI fields (kind: ci_failure)
+    repo: str
+    workflow: str
+    first_failed_at: str
+    run_url: str
 
 
 # Normalized CI states. Derived by the GitHub client from a run's status and

@@ -2,31 +2,28 @@
 
 import json
 import threading
-import time
 from http.server import HTTPServer
-from io import BytesIO
 from unittest.mock import patch
+from urllib.error import HTTPError
+from urllib.request import urlopen
 
 import pytest
-from urllib.request import urlopen
-from urllib.error import HTTPError
 
 from pkgdb.dashboard import (
+    _js_array,
+    _js_string,
     generate_comparison_page,
     generate_overview_page,
     generate_package_page,
-    _js_string,
-    _js_array,
 )
-from pkgdb.server import DashboardHandler, start_server
-from pkgdb.service import PackageStatsService
 from pkgdb.db import (
     add_package,
     get_db,
-    store_stats,
     store_env_stats,
+    store_stats,
 )
-
+from pkgdb.server import DashboardHandler, start_server
+from pkgdb.service import PackageStatsService
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -326,7 +323,6 @@ class TestApiEndpoints:
         assert data == []
 
     def test_api_github_history(self, populated_db, server_url):
-        from pkgdb.db import store_github_stats_snapshot
 
         with get_db(populated_db) as conn:
             conn.executemany(
@@ -458,6 +454,7 @@ class TestServeCli:
     def test_cmd_serve_calls_start_server(self, populated_db):
         """cmd_serve should call start_server with correct args."""
         import argparse
+
         from pkgdb.cli import cmd_serve
 
         args = argparse.Namespace(database=populated_db, port=9999, no_browser=True)

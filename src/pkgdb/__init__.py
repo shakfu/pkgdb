@@ -40,8 +40,8 @@ from .cli import (
 from .config import (
     PkgdbConfig,
     get_config_path,
-    pkgdb_home,
     load_config,
+    pkgdb_home,
 )
 from .db import (
     REPO_SOURCE_DISCOVER,
@@ -52,24 +52,15 @@ from .db import (
     add_repo,
     cleanup_orphaned_stats,
     clear_ci_status,
-    get_ci_status,
-    get_repo_packages,
-    get_repos,
-    link_package_repo,
-    normalize_repo_key,
-    prune_ci_status,
-    remove_repo,
-    seed_repos_from_cache,
-    set_repo_enabled,
-    store_ci_status,
+    default_db_file,
+    default_report_file,
     get_all_github_releases,
     get_all_history,
     get_all_pypi_releases,
     get_cached_env_summary,
     get_cached_os_stats,
     get_cached_python_versions,
-    default_db_file,
-    default_report_file,
+    get_ci_status,
     get_config_dir,
     get_daily_downloads,
     get_database_stats,
@@ -77,24 +68,33 @@ from .db import (
     get_db_connection,
     get_github_releases,
     get_github_stats_history,
-    get_milestone_high_water,
-    set_milestone_high_water,
     get_latest_stats,
+    get_milestone_high_water,
+    get_next_update_seconds,
     get_package_history,
     get_package_tags,
     get_packages,
     get_packages_for_tag,
-    get_tags_map,
-    get_next_update_seconds,
     get_packages_needing_update,
     get_pypi_releases,
+    get_repo_packages,
+    get_repos,
     get_stats_with_growth,
+    get_tags_map,
     init_db,
     is_tracked,
+    link_package_repo,
+    normalize_repo_key,
+    prune_ci_status,
     prune_old_stats,
     record_fetch_attempt,
     remove_package,
     remove_package_tag,
+    remove_repo,
+    seed_repos_from_cache,
+    set_milestone_high_water,
+    set_repo_enabled,
+    store_ci_status,
     store_daily_downloads,
     store_env_stats,
     store_github_releases,
@@ -102,6 +102,11 @@ from .db import (
     store_pypi_releases,
     store_stats,
     store_stats_batch,
+)
+from .export import (
+    export_csv,
+    export_json,
+    export_markdown,
 )
 from .github import (
     CI_CACHE_TTL_MINUTES,
@@ -125,11 +130,6 @@ from .github import (
     latest_run_per_workflow,
     parse_github_url,
     parse_workflow_runs,
-)
-from .export import (
-    export_csv,
-    export_json,
-    export_markdown,
 )
 from .logging import (
     get_logger,
@@ -156,9 +156,9 @@ from .types import (
     CI_STATE_PASS,
     CI_STATE_RUNNING,
     CI_STATE_UNKNOWN,
-    CIRun,
     CategoryDownloads,
     CheckEvent,
+    CIRun,
     DailyDownload,
     DatabaseInfo,
     EnvSummary,
@@ -178,7 +178,8 @@ from .utils import (
     validate_package_name,
 )
 
-__all__ = [
+# Grouped by submodule rather than sorted.
+__all__ = [  # noqa: RUF022
     # Version
     "__version__",
     # API

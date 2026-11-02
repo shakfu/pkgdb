@@ -4,55 +4,54 @@ import json
 import os
 import tempfile
 from datetime import datetime, timedelta
-
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from conftest import mock_pypistats, track
+
 from pkgdb import (
-    get_db_connection,
-    get_db,
-    init_db,
-    add_package,
-    store_stats,
-    store_daily_downloads,
-    get_package_history,
-    get_latest_stats,
-    PackageStatsService,
-    PackageInfo,
     FetchResult,
     PackageDetails,
-    SyncResult,
-    RepoStats,
+    PackageInfo,
+    PackageStatsService,
     RepoResult,
+    RepoStats,
+    SyncResult,
+    add_package,
+    get_db,
+    get_db_connection,
+    get_latest_stats,
+    get_package_history,
+    init_db,
+    store_daily_downloads,
+    store_stats,
 )
-from pkgdb.utils import utcnow
 from pkgdb.github import store_cached_repo_data
+from pkgdb.utils import utcnow
 
 
 def _make_repo_stats(**overrides):
     """Helper to create a RepoStats with sensible defaults."""
-    defaults = dict(
-        owner="test",
-        name="repo",
-        full_name="test/repo",
-        description="Test repo",
-        stars=100,
-        forks=10,
-        open_issues=5,
-        watchers=50,
-        language="Python",
-        license="MIT",
-        created_at=utcnow() - timedelta(days=365),
-        updated_at=utcnow(),
-        pushed_at=utcnow() - timedelta(days=1),
-        archived=False,
-        fork=False,
-        default_branch="main",
-        topics=["test"],
-    )
+    defaults = {
+        "owner": "test",
+        "name": "repo",
+        "full_name": "test/repo",
+        "description": "Test repo",
+        "stars": 100,
+        "forks": 10,
+        "open_issues": 5,
+        "watchers": 50,
+        "language": "Python",
+        "license": "MIT",
+        "created_at": utcnow() - timedelta(days=365),
+        "updated_at": utcnow(),
+        "pushed_at": utcnow() - timedelta(days=1),
+        "archived": False,
+        "fork": False,
+        "default_branch": "main",
+        "topics": ["test"],
+    }
     defaults.update(overrides)
     return RepoStats(**defaults)
 
@@ -255,6 +254,7 @@ class TestPackageStatsService:
 
     def test_run_checks_detects_spike(self, temp_db):
         from datetime import datetime, timedelta
+
         from pkgdb import store_daily_downloads
 
         service = PackageStatsService(temp_db)
@@ -448,15 +448,13 @@ class TestPackageStatsService:
             {"data": [{"category": "Linux", "downloads": 4000}]}
         )
 
-        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                with patch(
-                    "pkgdb.api.pypistats.python_minor", return_value=python_response
-                ):
-                    with patch(
-                        "pkgdb.api.pypistats.system", return_value=system_response
-                    ):
-                        details = service.fetch_package_details("test-pkg")
+        with (
+            patch("pkgdb.api.pypistats.recent", return_value=recent_response),
+            patch("pkgdb.api.pypistats.overall", return_value=overall_response),
+            patch("pkgdb.api.pypistats.python_minor", return_value=python_response),
+            patch("pkgdb.api.pypistats.system", return_value=system_response),
+        ):
+            details = service.fetch_package_details("test-pkg")
 
         assert isinstance(details, PackageDetails)
         assert details.name == "test-pkg"
@@ -676,9 +674,7 @@ class TestServiceSyncSafeguards:
 
         with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
             mock_fetch.return_value = ["new-account-pkg"]
-            result = service.sync_packages_from_user(
-                "newname", prune=True, force=True
-            )
+            result = service.sync_packages_from_user("newname", prune=True, force=True)
 
         assert not result.no_overlap
         assert result.added == ["new-account-pkg"]
@@ -726,11 +722,13 @@ class TestServiceSyncSafeguards:
 
         with patch("pkgdb.service.fetch_user_packages") as mock_fetch:
             mock_fetch.return_value = ["common", "added"]
-            with patch(
-                "pkgdb.service.backup_database", side_effect=OSError("disk full")
+            with (
+                patch(
+                    "pkgdb.service.backup_database", side_effect=OSError("disk full")
+                ),
+                pytest.raises(OSError),
             ):
-                with pytest.raises(OSError):
-                    service.sync_packages_from_user("user", prune=True)
+                service.sync_packages_from_user("user", prune=True)
 
         assert sorted(p.name for p in service.list_packages()) == ["common", "removed"]
 
@@ -802,21 +800,17 @@ class TestServicePathValidation:
         # Invalid extension should fail
         with tempfile.TemporaryDirectory() as tmpdir:
             bad_path = os.path.join(tmpdir, "report.csv")
-            with pytest.raises(ValueError) as exc_info:
-                with patch(
-                    "pkgdb.api.pypistats.python_minor", return_value=python_response
-                ):
-                    with patch(
-                        "pkgdb.api.pypistats.system", return_value=system_response
-                    ):
-                        with patch(
-                            "pkgdb.api.pypistats.recent", return_value=recent_response
-                        ):
-                            with patch(
-                                "pkgdb.api.pypistats.overall",
-                                return_value=overall_response,
-                            ):
-                                service.generate_package_report("test-pkg", bad_path)
+            with (
+                pytest.raises(ValueError) as exc_info,
+                patch("pkgdb.api.pypistats.python_minor", return_value=python_response),
+                patch("pkgdb.api.pypistats.system", return_value=system_response),
+                patch("pkgdb.api.pypistats.recent", return_value=recent_response),
+                patch(
+                    "pkgdb.api.pypistats.overall",
+                    return_value=overall_response,
+                ),
+            ):
+                service.generate_package_report("test-pkg", bad_path)
             assert "extension" in str(exc_info.value).lower()
 
     def test_export_validates_output_path(self, temp_db):
@@ -907,7 +901,7 @@ class TestServicePackageVerification:
                 return (True, None)
 
             with patch("pkgdb.service.check_package_exists", side_effect=mock_check):
-                added, skipped, invalid, not_found = service.import_packages(
+                added, _skipped, _invalid, not_found = service.import_packages(
                     file_path, verify=True
                 )
 
@@ -926,7 +920,7 @@ class TestServicePackageVerification:
 
         try:
             with patch("pkgdb.service.check_package_exists") as mock_check:
-                added, skipped, invalid, not_found = service.import_packages(
+                added, _skipped, _invalid, not_found = service.import_packages(
                     file_path, verify=False
                 )
 
@@ -997,7 +991,6 @@ class TestServiceGithubStats:
         assert history[0]["open_issues_excl_prs"] == 2
 
     def test_get_star_growth(self, temp_db):
-        from pkgdb import store_github_stats_snapshot
 
         service = PackageStatsService(temp_db)
         service.add_package("gh-pkg", verify=False)

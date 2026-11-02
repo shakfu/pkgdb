@@ -11,21 +11,21 @@ from unittest.mock import patch
 import pytest
 
 from pkgdb import (
-    get_db_connection,
-    get_db,
-    init_db,
+    PackageStatsService,
     add_package,
-    get_packages,
-    get_latest_stats,
-    get_all_history,
-    store_stats,
-    load_packages,
-    load_packages_from_file,
+    fetch_os_stats,
     fetch_package_stats,
     fetch_python_versions,
-    fetch_os_stats,
     generate_html_report,
-    PackageStatsService,
+    get_all_history,
+    get_db,
+    get_db_connection,
+    get_latest_stats,
+    get_packages,
+    init_db,
+    load_packages,
+    load_packages_from_file,
+    store_stats,
 )
 
 
@@ -92,9 +92,11 @@ class TestErrorPaths:
     def test_database_invalid_path(self):
         """get_db should handle invalid paths gracefully."""
         # Directory that doesn't exist
-        with pytest.raises((sqlite3.OperationalError, OSError)):
-            with get_db("/nonexistent/path/to/db.sqlite") as conn:
-                pass
+        with (
+            pytest.raises((sqlite3.OperationalError, OSError)),
+            get_db("/nonexistent/path/to/db.sqlite"),
+        ):
+            pass
 
     def test_database_readonly_after_init(self, temp_db):
         """Database operations should work after init."""
@@ -185,11 +187,11 @@ class TestErrorPaths:
                 raise ValueError("API error")
             return overall_success
 
-        with patch("pkgdb.api.pypistats.recent", side_effect=mock_recent):
-            with patch("pkgdb.api.pypistats.overall", side_effect=mock_overall):
-                results = fetch_all_package_stats(
-                    ["good-pkg", "fail-pkg", "another-good"]
-                )
+        with (
+            patch("pkgdb.api.pypistats.recent", side_effect=mock_recent),
+            patch("pkgdb.api.pypistats.overall", side_effect=mock_overall),
+        ):
+            results = fetch_all_package_stats(["good-pkg", "fail-pkg", "another-good"])
 
         # Should have results for all packages
         assert len(results) == 3
@@ -383,6 +385,7 @@ class TestPerformance:
     def test_get_stats_with_growth_performance(self, temp_db):
         """get_stats_with_growth should be efficient with many packages."""
         from datetime import datetime, timedelta
+
         from pkgdb.db import get_stats_with_growth
 
         conn = get_db_connection(temp_db)

@@ -3,16 +3,14 @@
 import json
 from unittest.mock import patch
 
-import pytest
-
 from pkgdb import (
+    aggregate_env_stats,
+    check_package_exists,
+    fetch_daily_downloads,
+    fetch_os_stats,
     fetch_package_stats,
     fetch_python_versions,
-    fetch_os_stats,
-    fetch_daily_downloads,
-    aggregate_env_stats,
     fetch_user_packages,
-    check_package_exists,
 )
 
 
@@ -33,9 +31,11 @@ class TestFetchPackageStats:
             }
         )
 
-        with patch("pkgdb.api.pypistats.recent", return_value=recent_response):
-            with patch("pkgdb.api.pypistats.overall", return_value=overall_response):
-                stats = fetch_package_stats("test-package")
+        with (
+            patch("pkgdb.api.pypistats.recent", return_value=recent_response),
+            patch("pkgdb.api.pypistats.overall", return_value=overall_response),
+        ):
+            stats = fetch_package_stats("test-package")
 
         assert stats["last_day"] == 100
         assert stats["last_week"] == 700
@@ -148,7 +148,7 @@ class TestFetchDailyDownloads:
         dims = {r["dimension"] for r in records}
         assert dims == {"overall", "python", "os"}
         assert len(records) == 4
-        py = [r for r in records if r["dimension"] == "python"][0]
+        py = next(r for r in records if r["dimension"] == "python")
         assert py["category"] == "3.12"
         assert py["downloads"] == 40
 
@@ -301,9 +301,11 @@ class TestAggregateEnvStats:
             call_count["system"] += 1
             return system_response_1 if call_count["system"] == 1 else system_response_2
 
-        with patch("pkgdb.api.pypistats.python_minor", side_effect=mock_python_minor):
-            with patch("pkgdb.api.pypistats.system", side_effect=mock_system):
-                result = aggregate_env_stats(["pkg-a", "pkg-b"])
+        with (
+            patch("pkgdb.api.pypistats.python_minor", side_effect=mock_python_minor),
+            patch("pkgdb.api.pypistats.system", side_effect=mock_system),
+        ):
+            result = aggregate_env_stats(["pkg-a", "pkg-b"])
 
         # Should aggregate downloads
         py_versions = dict(result["python_versions"])
@@ -314,13 +316,13 @@ class TestAggregateEnvStats:
 
     def test_aggregate_env_stats_handles_errors(self):
         """aggregate_env_stats should handle API errors gracefully."""
-        with patch(
-            "pkgdb.api.pypistats.python_minor", side_effect=ValueError("API error")
+        with (
+            patch(
+                "pkgdb.api.pypistats.python_minor", side_effect=ValueError("API error")
+            ),
+            patch("pkgdb.api.pypistats.system", side_effect=ValueError("API error")),
         ):
-            with patch(
-                "pkgdb.api.pypistats.system", side_effect=ValueError("API error")
-            ):
-                result = aggregate_env_stats(["pkg-a"])
+            result = aggregate_env_stats(["pkg-a"])
 
         assert result["python_versions"] == []
         assert result["os_distribution"] == []

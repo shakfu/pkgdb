@@ -5,50 +5,48 @@ import os
 import subprocess
 import time
 from datetime import datetime, timedelta
-
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from pkgdb import (
-    get_db_connection,
-    init_db,
-    RepoStats,
     RepoResult,
-    parse_github_url,
+    RepoStats,
     extract_github_url,
+    get_db_connection,
     get_github_token,
+    init_db,
+    parse_github_url,
 )
-from pkgdb.utils import utcnow
 from pkgdb.github import (
-    _parse_repo_data,
     _parse_datetime,
+    _parse_repo_data,
     fetch_package_github_stats,
 )
+from pkgdb.utils import utcnow
 
 
 def _make_repo_stats(**overrides):
     """Helper to create a RepoStats with sensible defaults."""
-    defaults = dict(
-        owner="test",
-        name="repo",
-        full_name="test/repo",
-        description="Test repo",
-        stars=100,
-        forks=10,
-        open_issues=5,
-        watchers=50,
-        language="Python",
-        license="MIT",
-        created_at=utcnow() - timedelta(days=365),
-        updated_at=utcnow(),
-        pushed_at=utcnow() - timedelta(days=1),
-        archived=False,
-        fork=False,
-        default_branch="main",
-        topics=["test"],
-    )
+    defaults = {
+        "owner": "test",
+        "name": "repo",
+        "full_name": "test/repo",
+        "description": "Test repo",
+        "stars": 100,
+        "forks": 10,
+        "open_issues": 5,
+        "watchers": 50,
+        "language": "Python",
+        "license": "MIT",
+        "created_at": utcnow() - timedelta(days=365),
+        "updated_at": utcnow(),
+        "pushed_at": utcnow() - timedelta(days=1),
+        "archived": False,
+        "fork": False,
+        "default_branch": "main",
+        "topics": ["test"],
+    }
     defaults.update(overrides)
     return RepoStats(**defaults)
 
@@ -366,17 +364,21 @@ class TestGetGithubToken:
             assert get_github_token() is None
 
     def test_falls_back_to_the_gh_cli(self):
-        with patch.dict(os.environ, {}, clear=True):
-            with patch("pkgdb.github._gh_cli_token", return_value="gh-cli-token"):
-                assert get_github_token() == "gh-cli-token"
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("pkgdb.github._gh_cli_token", return_value="gh-cli-token"),
+        ):
+            assert get_github_token() == "gh-cli-token"
 
     def test_env_overrides_the_gh_cli(self):
-        with patch.dict(os.environ, {"GITHUB_TOKEN": "env-token"}, clear=True):
-            with patch(
+        with (
+            patch.dict(os.environ, {"GITHUB_TOKEN": "env-token"}, clear=True),
+            patch(
                 "pkgdb.github._gh_cli_token",
                 side_effect=AssertionError("gh must not be consulted"),
-            ):
-                assert get_github_token() == "env-token"
+            ),
+        ):
+            assert get_github_token() == "env-token"
 
 
 class TestGhCliToken:
@@ -601,9 +603,11 @@ class TestOpenIssueCount:
             mock_resp.__exit__ = MagicMock(return_value=False)
             return mock_resp
 
-        with patch("pkgdb.github.urlopen", side_effect=mock_urlopen):
-            with patch("pkgdb.github.time.sleep"):
-                stats = fetch_repo_stats("testowner", "testrepo", conn=conn)
+        with (
+            patch("pkgdb.github.urlopen", side_effect=mock_urlopen),
+            patch("pkgdb.github.time.sleep"),
+        ):
+            stats = fetch_repo_stats("testowner", "testrepo", conn=conn)
 
         assert stats.stars == 42
         assert stats.open_issues == 3  # GitHub's PR-inclusive figure
@@ -640,27 +644,27 @@ class TestUnauthenticatedWarning:
     def test_warns_when_there_is_no_token(self, caplog):
         from pkgdb.github import _github_headers
 
-        with patch.dict(os.environ, {}, clear=True):
-            with caplog.at_level("WARNING"):
-                _github_headers()
+        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING"):
+            _github_headers()
         assert "No GitHub token found" in caplog.text
         assert "60 requests/hour" in caplog.text
 
     def test_warns_only_once(self, caplog):
         from pkgdb.github import _github_headers
 
-        with patch.dict(os.environ, {}, clear=True):
-            with caplog.at_level("WARNING"):
-                for _ in range(5):
-                    _github_headers()
+        with patch.dict(os.environ, {}, clear=True), caplog.at_level("WARNING"):
+            for _ in range(5):
+                _github_headers()
         assert caplog.text.count("No GitHub token found") == 1
 
     def test_silent_with_a_token(self, caplog):
         from pkgdb.github import _github_headers
 
-        with patch.dict(os.environ, {"GITHUB_TOKEN": "t"}, clear=True):
-            with caplog.at_level("WARNING"):
-                headers = _github_headers()
+        with (
+            patch.dict(os.environ, {"GITHUB_TOKEN": "t"}, clear=True),
+            caplog.at_level("WARNING"),
+        ):
+            headers = _github_headers()
         assert headers["Authorization"] == "Bearer t"
         assert "No GitHub token" not in caplog.text
 
@@ -680,10 +684,12 @@ class TestRateLimitExhaustion:
         from pkgdb.github import _fetch_json
 
         error = self._http_error({"x-ratelimit-remaining": "0"})
-        with patch("pkgdb.github.urlopen", side_effect=error) as mock:
-            with patch("pkgdb.github.time.sleep") as sleep:
-                with pytest.raises(HTTPError):
-                    _fetch_json("https://api.github.com/x", {}, max_retries=3)
+        with (
+            patch("pkgdb.github.urlopen", side_effect=error) as mock,
+            patch("pkgdb.github.time.sleep") as sleep,
+            pytest.raises(HTTPError),
+        ):
+            _fetch_json("https://api.github.com/x", {}, max_retries=3)
         assert mock.call_count == 1
         sleep.assert_not_called()
 
@@ -693,10 +699,12 @@ class TestRateLimitExhaustion:
         from pkgdb.github import _fetch_json
 
         error = self._http_error({"x-ratelimit-remaining": "42"})
-        with patch("pkgdb.github.urlopen", side_effect=error) as mock:
-            with patch("pkgdb.github.time.sleep"):
-                with pytest.raises(HTTPError):
-                    _fetch_json("https://api.github.com/x", {}, max_retries=2)
+        with (
+            patch("pkgdb.github.urlopen", side_effect=error) as mock,
+            patch("pkgdb.github.time.sleep"),
+            pytest.raises(HTTPError),
+        ):
+            _fetch_json("https://api.github.com/x", {}, max_retries=2)
         assert mock.call_count == 3
 
     def test_a_403_without_the_header_still_retries(self):
@@ -704,10 +712,12 @@ class TestRateLimitExhaustion:
 
         from pkgdb.github import _fetch_json
 
-        with patch("pkgdb.github.urlopen", side_effect=self._http_error({})) as mock:
-            with patch("pkgdb.github.time.sleep"):
-                with pytest.raises(HTTPError):
-                    _fetch_json("https://api.github.com/x", {}, max_retries=2)
+        with (
+            patch("pkgdb.github.urlopen", side_effect=self._http_error({})) as mock,
+            patch("pkgdb.github.time.sleep"),
+            pytest.raises(HTTPError),
+        ):
+            _fetch_json("https://api.github.com/x", {}, max_retries=2)
         assert mock.call_count == 3
 
     def test_exhaustion_is_reported_with_its_reset_time(self, caplog):
@@ -719,10 +729,12 @@ class TestRateLimitExhaustion:
         error = self._http_error(
             {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(reset)}
         )
-        with patch("pkgdb.github.urlopen", side_effect=error):
-            with caplog.at_level("WARNING"):
-                with pytest.raises(HTTPError):
-                    _fetch_json("https://api.github.com/x", {})
+        with (
+            patch("pkgdb.github.urlopen", side_effect=error),
+            caplog.at_level("WARNING"),
+            pytest.raises(HTTPError),
+        ):
+            _fetch_json("https://api.github.com/x", {})
         assert "rate limit exhausted" in caplog.text
         assert "resets at 14:30" in caplog.text
 
@@ -732,11 +744,13 @@ class TestRateLimitExhaustion:
         from pkgdb.github import _fetch_json
 
         error = self._http_error({"x-ratelimit-remaining": "0"})
-        with patch("pkgdb.github.urlopen", side_effect=error):
-            with caplog.at_level("WARNING"):
-                for _ in range(3):
-                    with pytest.raises(HTTPError):
-                        _fetch_json("https://api.github.com/x", {})
+        with (
+            patch("pkgdb.github.urlopen", side_effect=error),
+            caplog.at_level("WARNING"),
+        ):
+            for _ in range(3):
+                with pytest.raises(HTTPError):
+                    _fetch_json("https://api.github.com/x", {})
         assert caplog.text.count("rate limit exhausted") == 1
 
     def test_a_scan_reports_exhaustion_as_unknown_not_passing(self, temp_db):
@@ -747,9 +761,11 @@ class TestRateLimitExhaustion:
         error = self._http_error({"x-ratelimit-remaining": "0"})
         service = PackageStatsService(temp_db)
         service.add_repo("o/r")
-        with patch("pkgdb.github.urlopen", side_effect=error):
-            with patch("pkgdb.github.time.sleep") as sleep:
-                results = service.fetch_ci_status(branch="main")
+        with (
+            patch("pkgdb.github.urlopen", side_effect=error),
+            patch("pkgdb.github.time.sleep") as sleep,
+        ):
+            results = service.fetch_ci_status(branch="main")
         assert results[0].error is not None
         assert results[0].failures == []
         sleep.assert_not_called()

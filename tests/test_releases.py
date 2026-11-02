@@ -1,17 +1,14 @@
 """Tests for PyPI and GitHub release storage and retrieval."""
 
-import pytest
-
 from pkgdb import (
-    get_db,
-    store_pypi_releases,
-    get_pypi_releases,
-    get_all_pypi_releases,
-    store_github_releases,
-    get_github_releases,
-    get_all_github_releases,
-    PyPIRelease,
     GitHubRelease,
+    PyPIRelease,
+    get_all_pypi_releases,
+    get_db,
+    get_github_releases,
+    get_pypi_releases,
+    store_github_releases,
+    store_pypi_releases,
 )
 
 

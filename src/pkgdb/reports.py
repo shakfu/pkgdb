@@ -231,8 +231,10 @@ def make_svg_pie_chart(
     total_width = size + legend_width
 
     svg_parts = [
-        f'<svg id="{chart_id}" viewBox="0 0 {total_width} {size}" '
-        f'style="width:100%;max-width:{total_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+        (
+            f'<svg id="{chart_id}" viewBox="0 0 {total_width} {size}" '
+            f'style="width:100%;max-width:{total_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+        )
     ]
 
     start_angle: float = 0
@@ -288,8 +290,10 @@ def _make_svg_bar_chart(data: list[tuple[str, int]], title: str, chart_id: str) 
     chart_height = len(data) * (bar_height + bar_gap) + 20
 
     svg_parts = [
-        f'<svg id="{chart_id}" viewBox="0 0 {chart_width} {chart_height}" '
-        f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:12px;">'
+        (
+            f'<svg id="{chart_id}" viewBox="0 0 {chart_width} {chart_height}" '
+            f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:12px;">'
+        )
     ]
 
     for i, (name, value) in enumerate(data):
@@ -345,8 +349,10 @@ def _make_single_line_chart(
     max_val = max(values) or 1
 
     svg_parts = [
-        f'<svg viewBox="0 0 {chart_width} {chart_height}" '
-        f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+        (
+            f'<svg viewBox="0 0 {chart_width} {chart_height}" '
+            f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+        )
     ]
 
     # Y-axis labels and grid lines
@@ -432,8 +438,10 @@ def _make_multi_line_chart(
     max_val = max_val or 1
 
     svg_parts = [
-        f'<svg id="{chart_id}" viewBox="0 0 {chart_width} {chart_height}" '
-        f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+        (
+            f'<svg id="{chart_id}" viewBox="0 0 {chart_width} {chart_height}" '
+            f'style="width:100%;max-width:{chart_width}px;height:auto;font-family:system-ui,sans-serif;font-size:11px;">'
+        )
     ]
 
     # Draw axes
@@ -1038,9 +1046,11 @@ def _make_line_chart_with_markers(
     date_range = (date_objs[-1] - date_min).days or 1
 
     svg_parts = [
-        f'<svg viewBox="0 0 {chart_width} {chart_height}" '
-        f'style="width:100%;max-width:{chart_width}px;height:auto;'
-        f'font-family:system-ui,sans-serif;font-size:11px;">'
+        (
+            f'<svg viewBox="0 0 {chart_width} {chart_height}" '
+            f'style="width:100%;max-width:{chart_width}px;height:auto;'
+            f'font-family:system-ui,sans-serif;font-size:11px;">'
+        )
     ]
 
     # Y-axis labels and grid lines

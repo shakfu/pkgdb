@@ -1,4 +1,4 @@
-"""Anomaly and milestone detection for ``pkgdb check``.
+"""Anomaly, milestone and CI-failure detection for ``pkgdb check``.
 
 These are pure functions over a package's daily download series (and its recent
 totals). They aggregate to whole weeks before looking for anomalies so that the
@@ -7,8 +7,9 @@ troughs) does not masquerade as spikes and drops.
 """
 
 from datetime import datetime, timedelta
+from typing import Any
 
-from .types import CheckEvent
+from .types import CI_STATE_FAIL, CheckEvent
 
 # Defaults for anomaly detection.
 DEFAULT_BASELINE_WEEKS = 8
@@ -133,3 +134,31 @@ def detect_milestones(
     if previous_total is None or current_total is None:
         return []
     return sorted(m for m in milestones if previous_total < m <= current_total)
+
+
+def detect_new_ci_failures(rows: list[dict[str, Any]]) -> list[CheckEvent]:
+    """Return a ``ci_failure`` event per failure streak not yet reported.
+
+    ``rows`` are stored CI rows. A streak is identified by its
+    ``first_failed_at``; it is new while that differs from the row's
+    ``notified_failed_at``. Marking it reported is the caller's job.
+    """
+    events: list[CheckEvent] = []
+    for row in rows:
+        started = row.get("first_failed_at")
+        if row.get("state") != CI_STATE_FAIL or not started:
+            continue
+        if started == row.get("notified_failed_at"):
+            continue
+        event: CheckEvent = {
+            "package": row["repo_key"],
+            "kind": "ci_failure",
+            "repo": row["repo_key"],
+            "workflow": row["workflow_name"],
+            "first_failed_at": started,
+            "message": f"workflow '{row['workflow_name']}' failing since {started}",
+        }
+        if row.get("run_url"):
+            event["run_url"] = row["run_url"]
+        events.append(event)
+    return events

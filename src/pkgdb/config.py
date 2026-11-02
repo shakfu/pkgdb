@@ -59,6 +59,7 @@ class PkgdbConfig:
     check_baseline_weeks: int = 8
     check_z_threshold: float = 2.5
     check_min_weekly: float = 10.0
+    check_ci: bool = False
 
     # [github]
     github_user: str | None = None
@@ -97,7 +98,8 @@ def load_config(config_path: Path | None = None) -> PkgdbConfig:
     try:
         with open(config_path, "rb") as f:
             raw = tomllib.load(f)
-    except Exception as e:
+    # TOMLDecodeError and UnicodeDecodeError are both ValueErrors.
+    except (OSError, ValueError) as e:
         logger.warning("Could not parse %s: %s", config_path, e)
         return PkgdbConfig()
 
@@ -135,6 +137,7 @@ def load_config(config_path: Path | None = None) -> PkgdbConfig:
         check_baseline_weeks=int(check.get("baseline_weeks", 8)),
         check_z_threshold=float(check.get("z_threshold", 2.5)),
         check_min_weekly=float(check.get("min_weekly", 10.0)),
+        check_ci=bool(check.get("ci", False)),
         github_user=github.get("user"),
         ci_branch=ci.get("branch"),
         ci_ignore_workflows=ignore_workflows,

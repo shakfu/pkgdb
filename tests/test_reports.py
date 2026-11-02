@@ -3,21 +3,18 @@
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta
-
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from pkgdb import (
-    make_svg_pie_chart,
+    GitHubRelease,
+    PyPIRelease,
+    RepoStats,
     generate_html_report,
     generate_package_html_report,
     generate_project_html_report,
-    RepoStats,
-    PyPIRelease,
-    GitHubRelease,
+    make_svg_pie_chart,
 )
 from pkgdb.reports import package_ci_states
 from pkgdb.utils import utcnow
@@ -327,11 +324,11 @@ class TestPackageHTMLReport:
         )
 
         try:
-            with patch(
-                "pkgdb.api.pypistats.python_minor", return_value=python_response
+            with (
+                patch("pkgdb.api.pypistats.python_minor", return_value=python_response),
+                patch("pkgdb.api.pypistats.system", return_value=system_response),
             ):
-                with patch("pkgdb.api.pypistats.system", return_value=system_response):
-                    generate_package_html_report("test-pkg", output_path, stats=stats)
+                generate_package_html_report("test-pkg", output_path, stats=stats)
 
             assert Path(output_path).exists()
             content = Path(output_path).read_text()
@@ -351,11 +348,11 @@ class TestPackageHTMLReport:
         system_response = json.dumps({"data": []})
 
         try:
-            with patch(
-                "pkgdb.api.pypistats.python_minor", return_value=python_response
+            with (
+                patch("pkgdb.api.pypistats.python_minor", return_value=python_response),
+                patch("pkgdb.api.pypistats.system", return_value=system_response),
             ):
-                with patch("pkgdb.api.pypistats.system", return_value=system_response):
-                    generate_package_html_report("test-pkg", output_path, stats=stats)
+                generate_package_html_report("test-pkg", output_path, stats=stats)
 
             content = Path(output_path).read_text()
             assert "Total Downloads" in content
@@ -391,11 +388,11 @@ class TestPackageHTMLReport:
         )
 
         try:
-            with patch(
-                "pkgdb.api.pypistats.python_minor", return_value=python_response
+            with (
+                patch("pkgdb.api.pypistats.python_minor", return_value=python_response),
+                patch("pkgdb.api.pypistats.system", return_value=system_response),
             ):
-                with patch("pkgdb.api.pypistats.system", return_value=system_response):
-                    generate_package_html_report("test-pkg", output_path, stats=stats)
+                generate_package_html_report("test-pkg", output_path, stats=stats)
 
             content = Path(output_path).read_text()
             assert "Environment Distribution" in content
@@ -441,13 +438,13 @@ class TestPackageHTMLReport:
         system_response = json.dumps({"data": []})
 
         try:
-            with patch(
-                "pkgdb.api.pypistats.python_minor", return_value=python_response
+            with (
+                patch("pkgdb.api.pypistats.python_minor", return_value=python_response),
+                patch("pkgdb.api.pypistats.system", return_value=system_response),
             ):
-                with patch("pkgdb.api.pypistats.system", return_value=system_response):
-                    generate_package_html_report(
-                        "test-pkg", output_path, stats=stats, history=history
-                    )
+                generate_package_html_report(
+                    "test-pkg", output_path, stats=stats, history=history
+                )
 
             content = Path(output_path).read_text()
             assert "Downloads Over Time" in content
@@ -1091,24 +1088,24 @@ class TestProjectReport:
 
 def _make_repo_stats(**overrides):
     """Helper to create a RepoStats with sensible defaults."""
-    defaults = dict(
-        owner="test",
-        name="repo",
-        full_name="test/repo",
-        description="Test repo",
-        stars=100,
-        forks=10,
-        open_issues=5,
-        watchers=50,
-        language="Python",
-        license="MIT",
-        created_at=utcnow() - timedelta(days=365),
-        updated_at=utcnow(),
-        pushed_at=utcnow() - timedelta(days=1),
-        archived=False,
-        fork=False,
-        default_branch="main",
-        topics=["test"],
-    )
+    defaults = {
+        "owner": "test",
+        "name": "repo",
+        "full_name": "test/repo",
+        "description": "Test repo",
+        "stars": 100,
+        "forks": 10,
+        "open_issues": 5,
+        "watchers": 50,
+        "language": "Python",
+        "license": "MIT",
+        "created_at": utcnow() - timedelta(days=365),
+        "updated_at": utcnow(),
+        "pushed_at": utcnow() - timedelta(days=1),
+        "archived": False,
+        "fork": False,
+        "default_branch": "main",
+        "topics": ["test"],
+    }
     defaults.update(overrides)
     return RepoStats(**defaults)

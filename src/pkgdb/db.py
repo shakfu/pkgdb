@@ -4,10 +4,11 @@ import json
 import os
 import shutil
 import sqlite3
+from collections.abc import Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 from .config import pkgdb_home
 from .types import (
@@ -53,6 +54,7 @@ def __getattr__(name: str) -> str:
     if name in _DEFAULTS:
         return _DEFAULTS[name]()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Membership predicate used by the `tracked_only` read options. Package-owned
 # data outlives `remove_package()` so that `cleanup` stays the single physical
@@ -386,6 +388,9 @@ def init_db(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (repo_key, workflow_name)
         )
     """)
+    # The `first_failed_at` that `pkgdb check --ci` last reported. A streak is
+    # announced once; a pass clears `first_failed_at`, so the next break is new.
+    _add_column_if_missing(conn, "github_ci_status", "notified_failed_at", "TEXT")
     conn.commit()
 
 
@@ -1730,6 +1735,23 @@ def get_ci_status(
         params.append(normalize_repo_key(repo_key))
     query += " ORDER BY repo_key, workflow_name"
     return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+
+def mark_ci_failure_notified(
+    conn: sqlite3.Connection,
+    repo_key: str,
+    workflow_name: str,
+    first_failed_at: str,
+    commit: bool = True,
+) -> None:
+    """Record that the failure streak starting at ``first_failed_at`` was reported."""
+    conn.execute(
+        """UPDATE github_ci_status SET notified_failed_at = ?
+           WHERE repo_key = ? AND workflow_name = ?""",
+        (first_failed_at, normalize_repo_key(repo_key), workflow_name),
+    )
+    if commit:
+        conn.commit()
 
 
 def prune_ci_status(

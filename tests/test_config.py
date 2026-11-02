@@ -1,17 +1,14 @@
 """Tests for config.toml loading, parsing, and applying to CLI args."""
 
 import argparse
-from pathlib import Path
-
-import pytest
 
 from pkgdb import (
     PkgdbConfig,
-    load_config,
-    get_config_path,
     apply_config,
     default_db_file,
     default_report_file,
+    get_config_path,
+    load_config,
 )
 
 
@@ -86,6 +83,7 @@ class TestConfig:
             "baseline_weeks = 6\n"
             "z_threshold = 3.0\n"
             "min_weekly = 25\n"
+            "ci = true\n"
         )
         config = load_config(config_path)
         # De-duplicated and sorted
@@ -93,6 +91,7 @@ class TestConfig:
         assert config.check_baseline_weeks == 6
         assert config.check_z_threshold == 3.0
         assert config.check_min_weekly == 25.0
+        assert config.check_ci is True
 
     def test_load_config_check_ignores_bad_milestones(self, tmp_path):
         """Non-integer milestone entries are skipped, not fatal."""
@@ -108,6 +107,7 @@ class TestConfig:
         assert config.check_baseline_weeks == 8
         assert config.check_z_threshold == 2.5
         assert config.check_min_weekly == 10.0
+        assert config.check_ci is False
         assert config.environment is False
         assert config.sort_by == "total"
 

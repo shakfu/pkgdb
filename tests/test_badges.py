@@ -1,17 +1,14 @@
 """Tests for SVG badge generation."""
 
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from pkgdb import (
-    get_db_connection,
-    init_db,
-    generate_badge_svg,
-    generate_downloads_badge,
     BADGE_COLORS,
     PackageStatsService,
+    generate_badge_svg,
+    generate_downloads_badge,
+    get_db_connection,
+    init_db,
     main,
 )
 

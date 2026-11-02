@@ -4,22 +4,27 @@ import argparse
 import json
 import logging
 import sqlite3
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import webbrowser
 
 from tabulate import tabulate
 
+from . import __version__
 from .config import PkgdbConfig, load_config
-from .db import default_db_file, default_report_file, get_config_dir, get_db
-from .db import get_next_update_seconds
+from .db import (
+    default_db_file,
+    default_report_file,
+    get_config_dir,
+    get_db,
+    get_next_update_seconds,
+)
 from .github import CI_RUN_WINDOW
 from .logging import setup_logging
 from .service import PackageStatsService
 from .types import PackageStats
 from .utils import make_sparkline, parse_date_arg, utcnow
-from . import __version__
 
 logger = logging.getLogger("pkgdb")
 
@@ -532,7 +537,7 @@ def cmd_diff(args: argparse.Namespace) -> None:
         "month": lambda c: c["month"],
         "week": lambda c: c["week"],
         "day": lambda c: c["day"],
-        "change": lambda c: (c["total"] - c["prev_total"] if c["prev_total"] else 0),
+        "change": lambda c: c["total"] - c["prev_total"] if c["prev_total"] else 0,
         "name": lambda c: c["package"],
     }
     reverse = sort_by != "name"
@@ -590,9 +595,10 @@ def cmd_check(args: argparse.Namespace) -> int:
     """Check command: detect download anomalies and milestone crossings.
 
     Analyzes the daily series for weekly spikes/drops and reports any configured
-    download milestone crossed since the previous fetch. Exits non-zero when any
-    event is found (so it composes with shell/CI notifiers); pass ``--exit-zero``
-    to always exit 0.
+    download milestone crossed since the previous fetch. With ``--ci`` it also
+    reports each new CI failure streak from the last recorded scan. Exits
+    non-zero when any event is found (so it composes with shell/CI notifiers);
+    pass ``--exit-zero`` to always exit 0.
     """
     service = PackageStatsService(args.database)
     config = load_config()
@@ -605,21 +611,24 @@ def cmd_check(args: argparse.Namespace) -> int:
     z_override = getattr(args, "z_threshold", None)
     z_threshold = z_override if z_override is not None else config.check_z_threshold
 
+    ci = getattr(args, "ci", False) or config.check_ci
     events = service.run_checks(
         milestones=milestones,
         baseline_weeks=config.check_baseline_weeks,
         z_threshold=z_threshold,
         min_weekly=config.check_min_weekly,
+        ci=ci,
     )
 
     if getattr(args, "json", False):
         print(json.dumps(events, indent=2))
     elif not events:
-        logger.info("No anomalies or milestones detected.")
+        suffix = " or new CI failures" if ci else ""
+        logger.info("No anomalies or milestones%s detected.", suffix)
     else:
         print(f"Detected {len(events)} event(s):\n")
         rows = [[e["package"], e["kind"].upper(), e["message"]] for e in events]
-        print(tabulate(rows, headers=["Package", "Event", "Detail"], tablefmt="simple"))
+        print(tabulate(rows, headers=["Subject", "Event", "Detail"], tablefmt="simple"))
 
     if events and not getattr(args, "exit_zero", False):
         return 1
@@ -1929,7 +1938,10 @@ def create_parser() -> argparse.ArgumentParser:
     # check command
     check_parser = subparsers.add_parser(
         "check",
-        help="Detect download anomalies (weekly spikes/drops) and milestone crossings",
+        help=(
+            "Detect download anomalies (weekly spikes/drops), milestone "
+            "crossings and, with --ci, new CI failures"
+        ),
     )
     check_parser.add_argument(
         "--milestone",
@@ -1945,6 +1957,14 @@ def create_parser() -> argparse.ArgumentParser:
         dest="z_threshold",
         default=None,
         help="Std-devs from baseline to flag an anomaly (default: config or 2.5)",
+    )
+    check_parser.add_argument(
+        "--ci",
+        action="store_true",
+        help=(
+            "Also report new CI failures from the last 'pkgdb ci' scan; "
+            "each failure streak is reported once"
+        ),
     )
     check_parser.add_argument(
         "--exit-zero",
@@ -2453,18 +2473,14 @@ def apply_config(args: argparse.Namespace, config: PkgdbConfig) -> None:
         args.database = config.database
 
     # Report output: config overrides the hardcoded default
-    if (
-        config.report_output
-        and getattr(args, "output", None) == default_report_file()
-    ):
+    if config.report_output and getattr(args, "output", None) == default_report_file():
         args.output = config.report_output
 
     # Boolean flags: config sets them if CLI didn't
     if config.github and not getattr(args, "github", False):
         args.github = True
-    if config.environment and not getattr(args, "env", False):
-        if hasattr(args, "env"):
-            args.env = True
+    if config.environment and hasattr(args, "env") and not getattr(args, "env", False):
+        args.env = True
     if config.no_browser and not getattr(args, "no_browser", False):
         args.no_browser = True
 
