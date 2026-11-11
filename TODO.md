@@ -12,6 +12,6 @@ Feature ideas for pkgdb, ordered by priority.
 ## Medium
 
 ### GitHub Integration
-- [ ] Report new CI failures as opt-in `pkgdb check` events - a standing failure must not keep `check` exiting 1 #agent
+- [x] Report new CI failures as opt-in `pkgdb check` events - a standing failure must not keep `check` exiting 1 #agent
 
 ## Low
